@@ -40,8 +40,7 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
           Connect-MgGraph -AccessToken $SecureToken
-          Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
+          
           $files = Get-ChildItem "./policies/*.json"
 
           foreach ($file in $files) {
