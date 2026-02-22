@@ -18,11 +18,11 @@ jobs:
     outputs:
       action_type: ${{ steps.setaction.outputs.action_type }}
       target_env: ${{ steps.setaction.outputs.target_env }}
-
     steps:
       - id: setaction
         run: |
-          case "${{ github.event.label.name }}" in
+          label="${{ github.event.label.name }}"
+          case "$label" in
             import-policy)
               echo "action_type=import" >> $GITHUB_OUTPUT
               ;;
@@ -48,49 +48,10 @@ jobs:
               ;;
           esac
 
-  validate:
-    needs: determine-action
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate Promotion Logic
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const labels = context.payload.pull_request.labels.map(l => l.name);
-            const actionType = "${{ needs.determine-action.outputs.action_type }}";
-            const targetEnv = "${{ needs.determine-action.outputs.target_env }}";
-
-            const order = ["Wave1","Wave2","Wave3","Prod"];
-            const labelMap = {
-              Wave1: "promote-wave1",
-              Wave2: "promote-wave2",
-              Wave3: "promote-wave3",
-              Prod: "promote-prod"
-            };
-
-            if (actionType === "promote") {
-              if (!labels.includes("import-policy")) {
-                core.setFailed("Policy must be imported before promotion.");
-              }
-
-              const currentIndex = order.indexOf(targetEnv);
-              if (currentIndex > 0) {
-                const previousLabel = labelMap[order[currentIndex - 1]];
-                if (!labels.includes(previousLabel)) {
-                  core.setFailed(`Cannot promote to ${targetEnv}. Missing ${previousLabel}.`);
-                }
-              }
-
-              const appliedWaveLabels = labels.filter(l => Object.values(labelMap).includes(l));
-              if (appliedWaveLabels.length > 1) {
-                core.setFailed("Only one promotion label allowed at a time.");
-              }
-            }
-
   import:
     if: needs.determine-action.outputs.action_type == 'import'
     runs-on: ubuntu-latest
-    environment: GraphApi
+    environment: Import
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -104,7 +65,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Import Policies (No Assignment)
+      - name: Import Policies (No Assignments)
         shell: pwsh
         run: |
           $base = "${{ github.event.pull_request.base.sha }}"
@@ -180,7 +141,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Deploy Policy to Wave
+      - name: Deploy Policy to Target Wave
         shell: pwsh
         run: |
           $base = "${{ github.event.pull_request.base.sha }}"
@@ -211,19 +172,14 @@ jobs:
                 -Method GET `
                 -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
 
-              if ($existing.value.Count -gt 0) {
-                  $policyId = $existing.value[0].id
-                  Invoke-MgGraphRequest `
-                    -Method PATCH `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId" `
-                    -Body ($json | ConvertTo-Json -Depth 100)
-              }
-              else {
+              if ($existing.value.Count -eq 0) {
                   Write-Host "Policy must be imported first!"
                   exit 1
               }
 
-              # Assign to target group
+              $policyId = $existing.value[0].id
+
+              # Assign to target group for this wave
               $groupId = "${{ secrets.TARGET_GROUP_ID }}"
               $assignmentBody = @{
                 assignments = @(
@@ -241,7 +197,7 @@ jobs:
                 -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
                 -Body ($assignmentBody | ConvertTo-Json -Depth 10)
 
-              Write-Host "Policy promoted to $($env:GITHUB_ENV) group $groupId"
+              Write-Host "Policy promoted to environment $($env:GITHUB_ENV) group $groupId"
           }
 
   auto-merge:
