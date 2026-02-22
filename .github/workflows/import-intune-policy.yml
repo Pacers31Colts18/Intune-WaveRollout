@@ -10,25 +10,34 @@ permissions:
   id-token: write
   contents: read
 
-env:
-  TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-  CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-
 jobs:
   import:
     runs-on: ubuntu-latest
+    environment: GraphApi
+
     steps:
-
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
 
-      - name: Install Graph
-        shell: pwsh
-        run: Install-Module Microsoft.Graph -Scope CurrentUser -Force
+      # LOGIN TO AZURE
+      - name: DEV Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
 
       - name: Import Policies
         shell: pwsh
         run: |
-          Connect-MgGraph -TenantId $env:TENANT_ID -ClientId $env:CLIENT_ID -Identity
+          $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
+          $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
+          $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
+          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
           $files = Get-ChildItem "./policies/*.json"
 
