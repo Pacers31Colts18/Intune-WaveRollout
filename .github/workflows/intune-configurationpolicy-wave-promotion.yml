@@ -43,7 +43,7 @@ jobs:
               echo "target_env=Prod" >> $GITHUB_OUTPUT
               ;;
             *)
-              echo "Unknown label"
+              echo "Unknown label: $label"
               exit 1
               ;;
           esac
@@ -121,7 +121,7 @@ jobs:
                     -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments/$($a.id)"
               }
 
-              Write-Host "Policy imported with no assignments."
+              Write-Host "Policy '$policyName' imported successfully with no assignments."
           }
 
   promote:
@@ -197,7 +197,7 @@ jobs:
                 -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
                 -Body ($assignmentBody | ConvertTo-Json -Depth 10)
 
-              Write-Host "Policy promoted to environment $($env:GITHUB_ENV) group $groupId"
+              Write-Host "Policy '$policyName' promoted to environment $($env:GITHUB_ENV) group $groupId"
           }
 
   auto-merge:
