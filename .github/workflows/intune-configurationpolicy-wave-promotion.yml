@@ -15,7 +15,6 @@ jobs:
 
   determine-action:
     runs-on: ubuntu-latest
-    environment: GraphApi
     outputs:
       action_type: ${{ steps.setaction.outputs.action_type }}
       target_env: ${{ steps.setaction.outputs.target_env }}
@@ -52,9 +51,8 @@ jobs:
   validate:
     needs: determine-action
     runs-on: ubuntu-latest
-
     steps:
-      - name: Validate Workflow Logic
+      - name: Validate Promotion Logic
         uses: actions/github-script@v7
         with:
           script: |
@@ -71,13 +69,11 @@ jobs:
             };
 
             if (actionType === "promote") {
-
               if (!labels.includes("import-policy")) {
                 core.setFailed("Policy must be imported before promotion.");
               }
 
               const currentIndex = order.indexOf(targetEnv);
-
               if (currentIndex > 0) {
                 const previousLabel = labelMap[order[currentIndex - 1]];
                 if (!labels.includes(previousLabel)) {
@@ -85,21 +81,19 @@ jobs:
                 }
               }
 
-              const waveLabels = Object.values(labelMap);
-              const appliedWaveLabels = labels.filter(l => waveLabels.includes(l));
-
+              const appliedWaveLabels = labels.filter(l => Object.values(labelMap).includes(l));
               if (appliedWaveLabels.length > 1) {
                 core.setFailed("Only one promotion label allowed at a time.");
               }
             }
 
-  deploy:
-    needs: [determine-action, validate]
+  import:
+    if: needs.determine-action.outputs.action_type == 'import'
     runs-on: ubuntu-latest
-    environment: ${{ needs.determine-action.outputs.target_env }}
-
+    environment: GraphApi
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -110,10 +104,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Deploy Policy
+      - name: Import Policies (No Assignment)
         shell: pwsh
         run: |
-
           $base = "${{ github.event.pull_request.base.sha }}"
           $head = "${{ github.event.pull_request.head.sha }}"
 
@@ -135,7 +128,6 @@ jobs:
           Connect-MgGraph -AccessToken $SecureToken
 
           foreach ($file in $changedFiles) {
-
               $json = Get-Content $file -Raw | ConvertFrom-Json
               $policyName = $json.name
 
@@ -158,50 +150,104 @@ jobs:
                   $policyId = $created.id
               }
 
-              if ("${{ needs.determine-action.outputs.action_type }}" -eq "import") {
+              # Remove all assignments for import
+              $assignments = Invoke-MgGraphRequest `
+                -Method GET `
+                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments"
+              foreach ($a in $assignments.value) {
+                  Invoke-MgGraphRequest `
+                    -Method DELETE `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments/$($a.id)"
+              }
 
-                  # Remove assignments only
-                  $assignments = Invoke-MgGraphRequest `
-                    -Method GET `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments"
+              Write-Host "Policy imported with no assignments."
+          }
 
-                  foreach ($a in $assignments.value) {
-                      Invoke-MgGraphRequest `
-                        -Method DELETE `
-                        -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments/$($a.id)"
-                  }
+  promote:
+    if: needs.determine-action.outputs.action_type == 'promote'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.determine-action.outputs.target_env }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-                  Write-Host "Policy imported with no assignments."
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Deploy Policy to Wave
+        shell: pwsh
+        run: |
+          $base = "${{ github.event.pull_request.base.sha }}"
+          $head = "${{ github.event.pull_request.head.sha }}"
+
+          $changedFiles = git diff --name-only $base $head |
+                          Where-Object { $_ -like "policies/*.json" }
+
+          if (-not $changedFiles) {
+              Write-Host "No policy changes detected."
+              exit 0
+          }
+
+          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
+
+          $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
+          $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
+          $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
+
+          Connect-MgGraph -AccessToken $SecureToken
+
+          foreach ($file in $changedFiles) {
+              $json = Get-Content $file -Raw | ConvertFrom-Json
+              $policyName = $json.name
+
+              $existing = Invoke-MgGraphRequest `
+                -Method GET `
+                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
+
+              if ($existing.value.Count -gt 0) {
+                  $policyId = $existing.value[0].id
+                  Invoke-MgGraphRequest `
+                    -Method PATCH `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId" `
+                    -Body ($json | ConvertTo-Json -Depth 100)
               }
               else {
-
-                  $groupId = "${{ secrets.TARGET_GROUP_ID }}"
-
-                  $assignmentBody = @{
-                    assignments = @(
-                      @{
-                        target = @{
-                          "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                          groupId = $groupId
-                        }
-                      }
-                    )
-                  }
-
-                  Invoke-MgGraphRequest `
-                    -Method POST `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
-                    -Body ($assignmentBody | ConvertTo-Json -Depth 10)
-
-                  Write-Host "Policy promoted to group $groupId"
+                  Write-Host "Policy must be imported first!"
+                  exit 1
               }
+
+              # Assign to target group
+              $groupId = "${{ secrets.TARGET_GROUP_ID }}"
+              $assignmentBody = @{
+                assignments = @(
+                  @{
+                    target = @{
+                      "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                      groupId = $groupId
+                    }
+                  }
+                )
+              }
+
+              Invoke-MgGraphRequest `
+                -Method POST `
+                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
+                -Body ($assignmentBody | ConvertTo-Json -Depth 10)
+
+              Write-Host "Policy promoted to $($env:GITHUB_ENV) group $groupId"
           }
 
   auto-merge:
-    needs: deploy
+    needs: promote
     if: needs.determine-action.outputs.target_env == 'Prod'
     runs-on: ubuntu-latest
-
     steps:
       - name: Enable Auto Merge
         uses: peter-evans/enable-pull-request-automerge@v3
