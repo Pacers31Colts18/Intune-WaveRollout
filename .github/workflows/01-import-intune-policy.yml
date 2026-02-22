@@ -18,20 +18,33 @@ jobs:
 
     steps:
 
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0   # Required for reliable git diff
 
-      - name: Detect changed policies
+      - name: Detect Changed Policies
         id: changes
         shell: pwsh
         run: |
-          $changedFiles = git diff --name-only HEAD^ HEAD | Where-Object { $_ -like "policies/*.json" }
+
+          $base = "${{ github.event.before }}"
+          $head = "${{ github.sha }}"
+
+          Write-Host "Base commit: $base"
+          Write-Host "Head commit: $head"
+
+          $changedFiles = git diff --name-only $base $head |
+                          Where-Object { $_ -like "policies/*.json" }
 
           if (-not $changedFiles) {
               Write-Host "No policy changes detected."
+              "" | Out-File changed-policies.txt
               exit 0
           }
+
+          Write-Host "Changed policy files detected:"
+          $changedFiles | ForEach-Object { Write-Host $_ }
 
           $policyNames = @()
 
@@ -53,17 +66,27 @@ jobs:
         shell: pwsh
         run: |
 
+          $base = "${{ github.event.before }}"
+          $head = "${{ github.sha }}"
+
+          $changedFiles = git diff --name-only $base $head |
+                          Where-Object { $_ -like "policies/*.json" }
+
+          if (-not $changedFiles) {
+              Write-Host "No policies to import."
+              exit 0
+          }
+
           $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
           $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
-
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
           Connect-MgGraph -AccessToken $SecureToken
 
-          $changedFiles = git diff --name-only HEAD^ HEAD | Where-Object { $_ -like "policies/*.json" }
-
           foreach ($file in $changedFiles) {
+
+              Write-Host "Processing file: $file"
 
               $json = Get-Content $file -Raw | ConvertFrom-Json
 
@@ -72,14 +95,18 @@ jobs:
                 -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$($json.name)'"
 
               if ($existing.value.Count -gt 0) {
-                  Write-Host "Updating $($json.name)"
+
+                  Write-Host "Updating policy: $($json.name)"
+
                   Invoke-MgGraphRequest `
                     -Method PATCH `
                     -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$($existing.value[0].id)" `
                     -Body ($json | ConvertTo-Json -Depth 100)
               }
               else {
-                  Write-Host "Creating $($json.name)"
+
+                  Write-Host "Creating policy: $($json.name)"
+
                   Invoke-MgGraphRequest `
                     -Method POST `
                     -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
@@ -87,7 +114,7 @@ jobs:
               }
           }
 
-      - name: Upload changed policies artifact
+      - name: Upload Changed Policies Artifact
         uses: actions/upload-artifact@v4
         with:
           name: changed-policies
