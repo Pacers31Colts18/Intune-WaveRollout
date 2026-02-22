@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - "intune-policies/*.json"
+      - "policies/*.json"
 
 permissions:
   id-token: write
