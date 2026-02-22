@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  DEV_GROUP_ID: ${{ secrets.WAVE1_GROUP_ID }}
+  WAVE1_GROUP_ID: ${{ secrets.WAVE1_GROUP_ID }}
 
 jobs:
   assign-wave1:
@@ -38,9 +38,11 @@ jobs:
         shell: pwsh
         run: |
 
-          if (-not $env:DEV_GROUP_ID) {
-              throw "DEV_GROUP_ID not set."
+          if (-not $env:WAVE1_GROUP_ID) {
+              throw "WAVE1_GROUP_ID not set."
           }
+
+          Write-Host "Wave1 Group ID: $env:WAVE1_GROUP_ID"
 
           $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
           $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
@@ -84,7 +86,7 @@ jobs:
               $alreadyAssigned = $false
 
               foreach ($assignment in $existingAssignments.value) {
-                  if ($assignment.target.groupId -eq $env:DEV_GROUP_ID) {
+                  if ($assignment.target.groupId -eq $env:WAVE1_GROUP_ID) {
                       $alreadyAssigned = $true
                       break
                   }
@@ -98,7 +100,7 @@ jobs:
               $assignmentArray += @{
                   target = @{
                       "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                      groupId      = $env:DEV_GROUP_ID
+                      groupId      = $env:WAVE1_GROUP_ID
                   }
               }
 
