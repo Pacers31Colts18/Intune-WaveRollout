@@ -1,0 +1,194 @@
+name: Intune Configuration Policy Wave Promotion
+
+on:
+  pull_request:
+    types: [labeled]
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
+jobs:
+
+  determine-wave:
+    runs-on: ubuntu-latest
+    outputs:
+      target_env: ${{ steps.setwave.outputs.target_env }}
+
+    steps:
+      - id: setwave
+        run: |
+          case "${{ github.event.label.name }}" in
+            promote-wave1)
+              echo "target_env=Wave1" >> $GITHUB_OUTPUT
+              ;;
+            promote-wave2)
+              echo "target_env=Wave2" >> $GITHUB_OUTPUT
+              ;;
+            promote-wave3)
+              echo "target_env=Wave3" >> $GITHUB_OUTPUT
+              ;;
+            promote-prod)
+              echo "target_env=Prod" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "Not a promotion label. Exiting."
+              exit 1
+              ;;
+          esac
+
+  validate-order:
+    needs: determine-wave
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate Promotion Order
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = context.payload.pull_request.labels.map(l => l.name);
+            const target = "${{ needs.determine-wave.outputs.target_env }}";
+
+            const order = ["Wave1","Wave2","Wave3","Prod"];
+            const labelMap = {
+              Wave1: "promote-wave1",
+              Wave2: "promote-wave2",
+              Wave3: "promote-wave3",
+              Prod: "promote-prod"
+            };
+
+            const currentIndex = order.indexOf(target);
+
+            // Check previous wave exists if not Wave1
+            if (currentIndex > 0) {
+              const requiredPrevious = labelMap[order[currentIndex - 1]];
+              if (!labels.includes(requiredPrevious)) {
+                core.setFailed(`Cannot promote to ${target}. Missing ${requiredPrevious}.`);
+              }
+            }
+
+            // Enforce single wave label (state machine)
+            const waveLabels = Object.values(labelMap);
+            const appliedWaveLabels = labels.filter(l => waveLabels.includes(l));
+
+            if (appliedWaveLabels.length > 1) {
+              core.setFailed(`Only one promotion label allowed at a time.`);
+            }
+
+  deploy:
+    needs: [determine-wave, validate-order]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.determine-wave.outputs.target_env }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Deploy Configuration Policy + Assignment
+        shell: pwsh
+        run: |
+
+          $base = "${{ github.event.pull_request.base.sha }}"
+          $head = "${{ github.event.pull_request.head.sha }}"
+
+          $changedFiles = git diff --name-only $base $head |
+                          Where-Object { $_ -like "policies/*.json" }
+
+          if (-not $changedFiles) {
+              Write-Host "No policy changes detected."
+              exit 0
+          }
+
+          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
+
+          $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
+          $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
+          $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
+
+          Connect-MgGraph -AccessToken $SecureToken
+
+          foreach ($file in $changedFiles) {
+
+              $json = Get-Content $file -Raw | ConvertFrom-Json
+              $policyName = $json.name
+
+              Write-Host "Processing $policyName"
+
+              $existing = Invoke-MgGraphRequest `
+                -Method GET `
+                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
+
+              if ($existing.value.Count -gt 0) {
+                  $policyId = $existing.value[0].id
+                  Write-Host "Updating policy"
+                  Invoke-MgGraphRequest `
+                    -Method PATCH `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId" `
+                    -Body ($json | ConvertTo-Json -Depth 100)
+              }
+              else {
+                  Write-Host "Creating policy"
+                  $created = Invoke-MgGraphRequest `
+                    -Method POST `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
+                    -Body ($json | ConvertTo-Json -Depth 100)
+
+                  $policyId = $created.id
+              }
+
+              # Remove existing assignments
+              $assignments = Invoke-MgGraphRequest `
+                -Method GET `
+                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments"
+
+              foreach ($a in $assignments.value) {
+                  Invoke-MgGraphRequest `
+                    -Method DELETE `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments/$($a.id)"
+              }
+
+              # Apply new assignment
+              $groupId = "${{ secrets.TARGET_GROUP_ID }}"
+
+              $assignmentBody = @{
+                assignments = @(
+                  @{
+                    target = @{
+                      "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                      groupId = $groupId
+                    }
+                  }
+                )
+              }
+
+              Invoke-MgGraphRequest `
+                -Method POST `
+                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
+                -Body ($assignmentBody | ConvertTo-Json -Depth 10)
+
+              Write-Host "Assigned to group $groupId"
+          }
+
+  auto-merge:
+    needs: deploy
+    if: needs.determine-wave.outputs.target_env == 'Prod'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Enable Auto Merge
+        uses: peter-evans/enable-pull-request-automerge@v3
+        with:
+          pull-request-number: ${{ github.event.pull_request.number }}
+          merge-method: squash
