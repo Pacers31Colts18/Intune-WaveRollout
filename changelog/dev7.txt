@@ -1,0 +1,5 @@
+Date: 2026-02-22
+Author: Pacers31Colts18
+
+Policies:
+- DEV7 - CIS (L1) - Win11 Enterprise - Administrative Templates (Computer)
