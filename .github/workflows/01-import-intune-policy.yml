@@ -1,50 +1,48 @@
 name: 01-import-intune-policy
 
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches:
       - main
-    paths:
-      - "policies/*.json"
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
 
 jobs:
   import:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     environment: GraphApi
 
     steps:
-
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # Required for reliable git diff
+          fetch-depth: 0
 
-      - name: Detect Changed Policies
-        id: changes
+      - name: Build Changelog From PR
         shell: pwsh
         run: |
 
-          $base = "${{ github.event.before }}"
-          $head = "${{ github.sha }}"
+          $prTitle = "${{ github.event.pull_request.title }}"
+          $author  = "${{ github.event.pull_request.user.login }}"
+          $date    = Get-Date -Format "yyyy-MM-dd"
 
-          Write-Host "Base commit: $base"
-          Write-Host "Head commit: $head"
+          # Sanitize PR title for filename
+          $safeTitle = $prTitle -replace '[^a-zA-Z0-9\-]', '-'
+
+          $base = "${{ github.event.pull_request.base.sha }}"
+          $head = "${{ github.event.pull_request.merge_commit_sha }}"
 
           $changedFiles = git diff --name-only $base $head |
                           Where-Object { $_ -like "policies/*.json" }
 
           if (-not $changedFiles) {
               Write-Host "No policy changes detected."
-              "" | Out-File changed-policies.txt
               exit 0
           }
-
-          Write-Host "Changed policy files detected:"
-          $changedFiles | ForEach-Object { Write-Host $_ }
 
           $policyNames = @()
 
@@ -53,7 +51,30 @@ jobs:
               $policyNames += $json.name
           }
 
-          $policyNames | Out-File changed-policies.txt -Encoding utf8
+          New-Item -ItemType Directory -Force -Path changelog
+
+          $filePath = "changelog/$safeTitle.txt"
+
+          # Build changelog content safely (no inline expansion)
+          $lines = @()
+          $lines += "Date: $date"
+          $lines += "Author: $author"
+          $lines += ""
+          $lines += "Policies:"
+
+          foreach ($policy in $policyNames) {
+              $lines += "- $policy"
+          }
+
+          $lines | Out-File $filePath -Encoding utf8
+
+      - name: Commit Changelog
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add changelog/
+          git commit -m "Add changelog for PR merge" || echo "No changes"
+          git push
 
       - name: Azure Login
         uses: azure/login@v2
@@ -62,17 +83,24 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Import Policies
+      - name: Import Changed Policies
         shell: pwsh
         run: |
 
-          $base = "${{ github.event.before }}"
-          $head = "${{ github.sha }}"
+          $safeTitle = "${{ github.event.pull_request.title }}" -replace '[^a-zA-Z0-9\-]', '-'
+          $filePath = "changelog/$safeTitle.txt"
 
-          $changedFiles = git diff --name-only $base $head |
-                          Where-Object { $_ -like "policies/*.json" }
+          if (!(Test-Path $filePath)) {
+              Write-Host "No changelog file found."
+              exit 0
+          }
 
-          if (-not $changedFiles) {
+          $content = Get-Content $filePath
+          $policyNames = $content |
+                         Where-Object { $_ -like "- *" } |
+                         ForEach-Object { $_.Substring(2) }
+
+          if (-not $policyNames) {
               Write-Host "No policies to import."
               exit 0
           }
@@ -80,23 +108,29 @@ jobs:
           $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
           $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
+
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
-          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
           Connect-MgGraph -AccessToken $SecureToken
+          Select-MgProfile beta
 
-          foreach ($file in $changedFiles) {
+          foreach ($policyName in $policyNames) {
 
-              Write-Host "Processing file: $file"
+              $file = Get-ChildItem policies -Filter *.json |
+                      Where-Object {
+                        (Get-Content $_.FullName -Raw | ConvertFrom-Json).name -eq $policyName
+                      }
 
-              $json = Get-Content $file -Raw | ConvertFrom-Json
+              if (-not $file) { continue }
+
+              $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
 
               $existing = Invoke-MgGraphRequest `
                 -Method GET `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$($json.name)'"
+                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
 
               if ($existing.value.Count -gt 0) {
 
-                  Write-Host "Updating policy: $($json.name)"
+                  Write-Host "Updating $policyName"
 
                   Invoke-MgGraphRequest `
                     -Method PATCH `
@@ -105,7 +139,7 @@ jobs:
               }
               else {
 
-                  Write-Host "Creating policy: $($json.name)"
+                  Write-Host "Creating $policyName"
 
                   Invoke-MgGraphRequest `
                     -Method POST `
@@ -113,9 +147,3 @@ jobs:
                     -Body ($json | ConvertTo-Json -Depth 100)
               }
           }
-
-      - name: Upload Changed Policies Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: changed-policies
-          path: changed-policies.txt
