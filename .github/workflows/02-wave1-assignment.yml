@@ -1,31 +1,21 @@
-name: 02-wave1-assignment
+name: 02-assign-wave1
 
 on:
-  workflow_run:
-    workflows: ["01-import-intune-policy"]
-    types:
-      - completed
+  push:
+    paths:
+      - "changelog/*.txt"
 
 permissions:
   id-token: write
   contents: read
 
-env:
-  WAVE1_GROUP_ID: ${{ secrets.WAVE1_GROUP_ID }}
-
 jobs:
-  assign-wave1:
+  wave1:
     runs-on: ubuntu-latest
     environment: GraphApi
 
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
-
     steps:
-
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: changed-policies
+      - uses: actions/checkout@v4
 
       - name: Azure Login
         uses: azure/login@v2
@@ -34,15 +24,24 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Assign Wave1 (Ring Aware)
+      - name: Assign Policies to Wave1
         shell: pwsh
         run: |
 
-          if (-not $env:WAVE1_GROUP_ID) {
-              throw "WAVE1_GROUP_ID not set."
+          $WAVE1_GROUP_ID = "${{ secrets.WAVE1_GROUP_ID }}"
+
+          $latestFile = Get-ChildItem changelog/*.txt |
+                        Sort-Object LastWriteTime -Descending |
+                        Select-Object -First 1
+
+          if (-not $latestFile) {
+              Write-Host "No changelog files found."
+              exit 0
           }
 
-          Write-Host "Wave1 Group ID: $env:WAVE1_GROUP_ID"
+          $content = Get-Content $latestFile.FullName
+          $policyNames = $content | Where-Object { $_ -like "- *" } |
+                         ForEach-Object { $_.Substring(2) }
 
           $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
           $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
@@ -52,66 +51,31 @@ jobs:
           Connect-MgGraph -AccessToken $SecureToken
           Select-MgProfile beta
 
-          $policyNames = Get-Content ./changed-policies.txt
-
           foreach ($policyName in $policyNames) {
 
-              Write-Host "Processing policy: $policyName"
+              $policy = Invoke-MgGraphRequest `
+                -Method GET `
+                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
 
-              $policySearch = Invoke-MgGraphRequest `
-                  -Method GET `
-                  -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
+              if ($policy.value.Count -eq 0) { continue }
 
-              if (-not $policySearch.value) {
-                  Write-Host "Policy not found. Skipping."
-                  continue
-              }
+              $policyId = $policy.value[0].id
 
-              $policy = $policySearch.value[0]
+              Write-Host "Assigning $policyName to Wave1"
 
-              $existingAssignments = Invoke-MgGraphRequest `
-                  -Method GET `
-                  -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$($policy.id)/assignments"
-
-              $assignmentArray = @()
-
-              if ($existingAssignments.value) {
-                  foreach ($assignment in $existingAssignments.value) {
-                      $assignmentArray += @{
-                          target = $assignment.target
-                      }
-                  }
-              }
-
-              $alreadyAssigned = $false
-
-              foreach ($assignment in $existingAssignments.value) {
-                  if ($assignment.target.groupId -eq $env:WAVE1_GROUP_ID) {
-                      $alreadyAssigned = $true
-                      break
-                  }
-              }
-
-              if ($alreadyAssigned) {
-                  Write-Host "Wave1 already assigned."
-                  continue
-              }
-
-              $assignmentArray += @{
-                  target = @{
+              $assignmentBody = @{
+                assignments = @(
+                  @{
+                    target = @{
                       "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                      groupId      = $env:WAVE1_GROUP_ID
+                      groupId = $WAVE1_GROUP_ID
+                    }
                   }
-              }
-
-              $assignBody = @{
-                  assignments = $assignmentArray
+                )
               }
 
               Invoke-MgGraphRequest `
-                  -Method POST `
-                  -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$($policy.id)/assign" `
-                  -Body ($assignBody | ConvertTo-Json -Depth 10)
-
-              Write-Host "Wave1 assigned successfully."
+                -Method POST `
+                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
+                -Body ($assignmentBody | ConvertTo-Json -Depth 5)
           }
