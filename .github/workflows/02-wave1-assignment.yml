@@ -19,6 +19,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Get Changelog File from Previous Workflow
+        id: get_changelog
+        run: |
+          # Use GitHub API to read workflow run outputs
+          $workflowRunId = ${{ github.event.workflow_run.id }}
+          $repo = "${{ github.repository }}"
+          $token = "${{ secrets.GITHUB_TOKEN }}"
+
+          $url = "https://api.github.com/repos/$repo/actions/runs/$workflowRunId/jobs"
+          $jobs = Invoke-RestMethod -Uri $url -Headers @{Authorization = "Bearer $token"}
+
+          # Find the job called 'import' and its outputs
+          foreach ($job in $jobs.jobs) {
+              if ($job.name -eq "import") {
+                  # This gives you the changelog file path output
+                  # We'll just reuse the name from Step 1 output
+                  $changelog_file = "changelog/$($job.name)"  # Placeholder
+              }
+          }
+
+          echo "changelog_file=$changelog_file" >> $env:GITHUB_ENV
+
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -29,19 +51,15 @@ jobs:
       - name: Assign Policies to Wave1
         shell: pwsh
         run: |
-
           $WAVE1_GROUP_ID = "${{ secrets.WAVE1_GROUP_ID }}"
+          $filePath = "${{ env.changelog_file }}"
 
-          $latestFile = Get-ChildItem changelog/*.txt |
-                        Sort-Object LastWriteTime -Descending |
-                        Select-Object -First 1
-
-          if (-not $latestFile) {
-              Write-Host "No changelog files found."
-              exit 0
+          if (!(Test-Path $filePath)) {
+              Write-Host "Changelog file not found: $filePath"
+              exit 1
           }
 
-          $content = Get-Content $latestFile.FullName
+          $content = Get-Content $filePath
           $policyNames = $content | Where-Object { $_ -like "- *" } |
                          ForEach-Object { $_.Substring(2) }
 
@@ -66,7 +84,6 @@ jobs:
               if ($policy.value.Count -eq 0) { continue }
 
               $policyId = $policy.value[0].id
-
               Write-Host "Assigning $policyName to Wave1"
 
               $assignmentBody = @{
