@@ -13,43 +13,8 @@ permissions:
 
 jobs:
 
-  determine-action:
-    runs-on: ubuntu-latest
-    outputs:
-      action_type: ${{ steps.setaction.outputs.action_type }}
-      target_env: ${{ steps.setaction.outputs.target_env }}
-    steps:
-      - id: setaction
-        run: |
-          label="${{ github.event.label.name }}"
-          case "$label" in
-            import-policy)
-              echo "action_type=import" >> $GITHUB_OUTPUT
-              ;;
-            promote-wave1)
-              echo "action_type=promote" >> $GITHUB_OUTPUT
-              echo "target_env=Wave1" >> $GITHUB_OUTPUT
-              ;;
-            promote-wave2)
-              echo "action_type=promote" >> $GITHUB_OUTPUT
-              echo "target_env=Wave2" >> $GITHUB_OUTPUT
-              ;;
-            promote-wave3)
-              echo "action_type=promote" >> $GITHUB_OUTPUT
-              echo "target_env=Wave3" >> $GITHUB_OUTPUT
-              ;;
-            promote-prod)
-              echo "action_type=promote" >> $GITHUB_OUTPUT
-              echo "target_env=Prod" >> $GITHUB_OUTPUT
-              ;;
-            *)
-              echo "Unknown label: $label"
-              exit 1
-              ;;
-          esac
-
   import:
-    if: needs.determine-action.outputs.action_type == 'import'
+    if: contains(github.event.pull_request.labels.*.name, 'import-policy')
     runs-on: ubuntu-latest
     environment: Import
     steps:
@@ -124,10 +89,10 @@ jobs:
               Write-Host "Policy '$policyName' imported successfully with no assignments."
           }
 
-  promote:
-    if: needs.determine-action.outputs.action_type == 'promote'
+  promote-wave1:
+    if: contains(github.event.pull_request.labels.*.name, 'promote-wave1')
     runs-on: ubuntu-latest
-    environment: ${{ needs.determine-action.outputs.target_env }}
+    environment: Wave1
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -141,19 +106,13 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Deploy Policy to Target Wave
+      - name: Promote to Wave1
         shell: pwsh
         run: |
-          $base = "${{ github.event.pull_request.base.sha }}"
-          $head = "${{ github.event.pull_request.head.sha }}"
-
-          $changedFiles = git diff --name-only $base $head |
+          $changedFiles = git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} |
                           Where-Object { $_ -like "policies/*.json" }
 
-          if (-not $changedFiles) {
-              Write-Host "No policy changes detected."
-              exit 0
-          }
+          if (-not $changedFiles) { exit 0 }
 
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
@@ -161,7 +120,6 @@ jobs:
           $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
           $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
-
           Connect-MgGraph -AccessToken $SecureToken
 
           foreach ($file in $changedFiles) {
@@ -178,8 +136,6 @@ jobs:
               }
 
               $policyId = $existing.value[0].id
-
-              # Assign to target group for this wave
               $groupId = "${{ secrets.TARGET_GROUP_ID }}"
               $assignmentBody = @{
                 assignments = @(
@@ -196,13 +152,30 @@ jobs:
                 -Method POST `
                 -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
                 -Body ($assignmentBody | ConvertTo-Json -Depth 10)
-
-              Write-Host "Policy '$policyName' promoted to environment $($env:GITHUB_ENV) group $groupId"
+              Write-Host "Policy '$policyName' promoted to Wave1"
           }
 
+  promote-wave2:
+    if: contains(github.event.pull_request.labels.*.name, 'promote-wave2')
+    runs-on: ubuntu-latest
+    environment: Wave2
+    steps: *promote-wave1.steps
+
+  promote-wave3:
+    if: contains(github.event.pull_request.labels.*.name, 'promote-wave3')
+    runs-on: ubuntu-latest
+    environment: Wave3
+    steps: *promote-wave1.steps
+
+  promote-prod:
+    if: contains(github.event.pull_request.labels.*.name, 'promote-prod')
+    runs-on: ubuntu-latest
+    environment: Prod
+    steps: *promote-wave1.steps
+
   auto-merge:
-    needs: promote
-    if: needs.determine-action.outputs.target_env == 'Prod'
+    if: contains(github.event.pull_request.labels.*.name, 'promote-prod')
+    needs: promote-prod
     runs-on: ubuntu-latest
     steps:
       - name: Enable Auto Merge
