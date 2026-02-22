@@ -1,4 +1,4 @@
-name: Intune Configuration Policy Wave Promotion
+name: Intune Configuration Policy Lifecycle
 
 on:
   pull_request:
@@ -13,44 +13,53 @@ permissions:
 
 jobs:
 
-  determine-wave:
+  determine-action:
     runs-on: ubuntu-latest
     outputs:
-      target_env: ${{ steps.setwave.outputs.target_env }}
+      action_type: ${{ steps.setaction.outputs.action_type }}
+      target_env: ${{ steps.setaction.outputs.target_env }}
 
     steps:
-      - id: setwave
+      - id: setaction
         run: |
           case "${{ github.event.label.name }}" in
+            import-policy)
+              echo "action_type=import" >> $GITHUB_OUTPUT
+              ;;
             promote-wave1)
+              echo "action_type=promote" >> $GITHUB_OUTPUT
               echo "target_env=Wave1" >> $GITHUB_OUTPUT
               ;;
             promote-wave2)
+              echo "action_type=promote" >> $GITHUB_OUTPUT
               echo "target_env=Wave2" >> $GITHUB_OUTPUT
               ;;
             promote-wave3)
+              echo "action_type=promote" >> $GITHUB_OUTPUT
               echo "target_env=Wave3" >> $GITHUB_OUTPUT
               ;;
             promote-prod)
+              echo "action_type=promote" >> $GITHUB_OUTPUT
               echo "target_env=Prod" >> $GITHUB_OUTPUT
               ;;
             *)
-              echo "Not a promotion label. Exiting."
+              echo "Unknown label"
               exit 1
               ;;
           esac
 
-  validate-order:
-    needs: determine-wave
+  validate:
+    needs: determine-action
     runs-on: ubuntu-latest
 
     steps:
-      - name: Validate Promotion Order
+      - name: Validate Workflow Logic
         uses: actions/github-script@v7
         with:
           script: |
             const labels = context.payload.pull_request.labels.map(l => l.name);
-            const target = "${{ needs.determine-wave.outputs.target_env }}";
+            const actionType = "${{ needs.determine-action.outputs.action_type }}";
+            const targetEnv = "${{ needs.determine-action.outputs.target_env }}";
 
             const order = ["Wave1","Wave2","Wave3","Prod"];
             const labelMap = {
@@ -60,28 +69,33 @@ jobs:
               Prod: "promote-prod"
             };
 
-            const currentIndex = order.indexOf(target);
+            if (actionType === "promote") {
 
-            // Check previous wave exists if not Wave1
-            if (currentIndex > 0) {
-              const requiredPrevious = labelMap[order[currentIndex - 1]];
-              if (!labels.includes(requiredPrevious)) {
-                core.setFailed(`Cannot promote to ${target}. Missing ${requiredPrevious}.`);
+              if (!labels.includes("import-policy")) {
+                core.setFailed("Policy must be imported before promotion.");
+              }
+
+              const currentIndex = order.indexOf(targetEnv);
+
+              if (currentIndex > 0) {
+                const previousLabel = labelMap[order[currentIndex - 1]];
+                if (!labels.includes(previousLabel)) {
+                  core.setFailed(`Cannot promote to ${targetEnv}. Missing ${previousLabel}.`);
+                }
+              }
+
+              const waveLabels = Object.values(labelMap);
+              const appliedWaveLabels = labels.filter(l => waveLabels.includes(l));
+
+              if (appliedWaveLabels.length > 1) {
+                core.setFailed("Only one promotion label allowed at a time.");
               }
             }
 
-            // Enforce single wave label (state machine)
-            const waveLabels = Object.values(labelMap);
-            const appliedWaveLabels = labels.filter(l => waveLabels.includes(l));
-
-            if (appliedWaveLabels.length > 1) {
-              core.setFailed(`Only one promotion label allowed at a time.`);
-            }
-
   deploy:
-    needs: [determine-wave, validate-order]
+    needs: [determine-action, validate]
     runs-on: ubuntu-latest
-    environment: ${{ needs.determine-wave.outputs.target_env }}
+    environment: ${{ needs.determine-action.outputs.target_env }}
 
     steps:
       - uses: actions/checkout@v4
@@ -95,7 +109,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Deploy Configuration Policy + Assignment
+      - name: Deploy Policy
         shell: pwsh
         run: |
 
@@ -124,66 +138,67 @@ jobs:
               $json = Get-Content $file -Raw | ConvertFrom-Json
               $policyName = $json.name
 
-              Write-Host "Processing $policyName"
-
               $existing = Invoke-MgGraphRequest `
                 -Method GET `
                 -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
 
               if ($existing.value.Count -gt 0) {
                   $policyId = $existing.value[0].id
-                  Write-Host "Updating policy"
                   Invoke-MgGraphRequest `
                     -Method PATCH `
                     -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId" `
                     -Body ($json | ConvertTo-Json -Depth 100)
               }
               else {
-                  Write-Host "Creating policy"
                   $created = Invoke-MgGraphRequest `
                     -Method POST `
                     -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
                     -Body ($json | ConvertTo-Json -Depth 100)
-
                   $policyId = $created.id
               }
 
-              # Remove existing assignments
-              $assignments = Invoke-MgGraphRequest `
-                -Method GET `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments"
+              if ("${{ needs.determine-action.outputs.action_type }}" -eq "import") {
 
-              foreach ($a in $assignments.value) {
-                  Invoke-MgGraphRequest `
-                    -Method DELETE `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments/$($a.id)"
-              }
+                  # Remove assignments only
+                  $assignments = Invoke-MgGraphRequest `
+                    -Method GET `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments"
 
-              # Apply new assignment
-              $groupId = "${{ secrets.TARGET_GROUP_ID }}"
-
-              $assignmentBody = @{
-                assignments = @(
-                  @{
-                    target = @{
-                      "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                      groupId = $groupId
-                    }
+                  foreach ($a in $assignments.value) {
+                      Invoke-MgGraphRequest `
+                        -Method DELETE `
+                        -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments/$($a.id)"
                   }
-                )
+
+                  Write-Host "Policy imported with no assignments."
               }
+              else {
 
-              Invoke-MgGraphRequest `
-                -Method POST `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
-                -Body ($assignmentBody | ConvertTo-Json -Depth 10)
+                  $groupId = "${{ secrets.TARGET_GROUP_ID }}"
 
-              Write-Host "Assigned to group $groupId"
+                  $assignmentBody = @{
+                    assignments = @(
+                      @{
+                        target = @{
+                          "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                          groupId = $groupId
+                        }
+                      }
+                    )
+                  }
+
+                  Invoke-MgGraphRequest `
+                    -Method POST `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
+                    -Body ($assignmentBody | ConvertTo-Json -Depth 10)
+
+                  Write-Host "Policy promoted to group $groupId"
+              }
           }
 
   auto-merge:
     needs: deploy
-    if: needs.determine-wave.outputs.target_env == 'Prod'
+    if: needs.determine-action.outputs.target_env == 'Prod'
     runs-on: ubuntu-latest
 
     steps:
