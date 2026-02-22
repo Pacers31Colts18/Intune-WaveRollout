@@ -26,7 +26,7 @@ jobs:
         id: changes
         shell: pwsh
         run: |
-          $changedFiles = git diff --name-only HEAD^ HEAD | Where-Object { $_ -like "intune-policies/*.json" }
+          $changedFiles = git diff --name-only HEAD^ HEAD | Where-Object { $_ -like "policies/*.json" }
 
           if (-not $changedFiles) {
               Write-Host "No policy changes detected."
@@ -58,10 +58,10 @@ jobs:
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
 
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
           Connect-MgGraph -AccessToken $SecureToken
-          Select-MgProfile beta
 
-          $changedFiles = git diff --name-only HEAD^ HEAD | Where-Object { $_ -like "intune-policies/*.json" }
+          $changedFiles = git diff --name-only HEAD^ HEAD | Where-Object { $_ -like "policies/*.json" }
 
           foreach ($file in $changedFiles) {
 
