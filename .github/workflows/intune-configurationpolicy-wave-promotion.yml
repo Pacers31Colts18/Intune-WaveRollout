@@ -15,6 +15,7 @@ jobs:
 
   determine-action:
     runs-on: ubuntu-latest
+    environment: GraphApi
     outputs:
       action_type: ${{ steps.setaction.outputs.action_type }}
       target_env: ${{ steps.setaction.outputs.target_env }}
