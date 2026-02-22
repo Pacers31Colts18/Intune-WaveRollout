@@ -15,6 +15,8 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     environment: GraphApi
+    outputs:
+      changelog_file: ${{ steps.set_changelog.outputs.changelog_file }}
 
     steps:
       - name: Checkout Repository
@@ -22,7 +24,77 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Import Changed Policies
+        id: import_policies
+        shell: pwsh
+        run: |
+
+          $base = "${{ github.event.pull_request.base.sha }}"
+          $head = "${{ github.event.pull_request.merge_commit_sha }}"
+
+          $changedFiles = git diff --name-only $base $head |
+                          Where-Object { $_ -like "policies/*.json" }
+
+          if (-not $changedFiles) {
+              Write-Host "No policy changes detected."
+              exit 0
+          }
+
+          $policyNames = @()
+
+          foreach ($file in $changedFiles) {
+              $json = Get-Content $file -Raw | ConvertFrom-Json
+              $policyNames += $json.name
+          }
+
+          $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
+          $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
+          $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
+
+          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
+          Connect-MgGraph -AccessToken $SecureToken
+
+          foreach ($policyName in $policyNames) {
+
+              $file = Get-ChildItem policies -Filter *.json |
+                      Where-Object {
+                        (Get-Content $_.FullName -Raw | ConvertFrom-Json).name -eq $policyName
+                      }
+
+              if (-not $file) { continue }
+
+              $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
+
+              $existing = Invoke-MgGraphRequest `
+                -Method GET `
+                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
+
+              if ($existing.value.Count -gt 0) {
+                  Write-Host "Updating $policyName"
+                  Invoke-MgGraphRequest `
+                    -Method PATCH `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$($existing.value[0].id)" `
+                    -Body ($json | ConvertTo-Json -Depth 100)
+              }
+              else {
+                  Write-Host "Creating $policyName"
+                  Invoke-MgGraphRequest `
+                    -Method POST `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
+                    -Body ($json | ConvertTo-Json -Depth 100)
+              }
+          }
+
       - name: Build Changelog From PR
+        id: set_changelog
         shell: pwsh
         run: |
 
@@ -45,7 +117,6 @@ jobs:
           }
 
           $policyNames = @()
-
           foreach ($file in $changedFiles) {
               $json = Get-Content $file -Raw | ConvertFrom-Json
               $policyNames += $json.name
@@ -55,7 +126,7 @@ jobs:
 
           $filePath = "changelog/$safeTitle.txt"
 
-          # Build changelog content safely (no inline expansion)
+          # Build changelog content
           $lines = @()
           $lines += "Date: $date"
           $lines += "Author: $author"
@@ -68,81 +139,5 @@ jobs:
 
           $lines | Out-File $filePath -Encoding utf8
 
-      - name: Commit Changelog
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add changelog/
-          git commit -m "Add changelog for PR merge" || echo "No changes"
-          git push
-
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          allow-no-subscriptions: true
-
-      - name: Import Changed Policies
-        shell: pwsh
-        run: |
-
-          $safeTitle = "${{ github.event.pull_request.title }}" -replace '[^a-zA-Z0-9\-]', '-'
-          $filePath = "changelog/$safeTitle.txt"
-
-          if (!(Test-Path $filePath)) {
-              Write-Host "No changelog file found."
-              exit 0
-          }
-
-          $content = Get-Content $filePath
-          $policyNames = $content |
-                         Where-Object { $_ -like "- *" } |
-                         ForEach-Object { $_.Substring(2) }
-
-          if (-not $policyNames) {
-              Write-Host "No policies to import."
-              exit 0
-          }
-
-          $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
-          $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
-          $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
-          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
-          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
-          Connect-MgGraph -AccessToken $SecureToken
-
-          foreach ($policyName in $policyNames) {
-
-              $file = Get-ChildItem policies -Filter *.json |
-                      Where-Object {
-                        (Get-Content $_.FullName -Raw | ConvertFrom-Json).name -eq $policyName
-                      }
-
-              if (-not $file) { continue }
-
-              $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
-
-              $existing = Invoke-MgGraphRequest `
-                -Method GET `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
-
-              if ($existing.value.Count -gt 0) {
-
-                  Write-Host "Updating $policyName"
-
-                  Invoke-MgGraphRequest `
-                    -Method PATCH `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$($existing.value[0].id)" `
-                    -Body ($json | ConvertTo-Json -Depth 100)
-              }
-              else {
-
-                  Write-Host "Creating $policyName"
-
-                  Invoke-MgGraphRequest `
-                    -Method POST `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
-                    -Body ($json | ConvertTo-Json -Depth 100)
-              }
-          }
+          # Expose the changelog file as workflow output for downstream jobs
+          echo "changelog_file=$filePath" >> $GITHUB_OUTPUT
