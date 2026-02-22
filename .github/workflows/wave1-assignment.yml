@@ -14,10 +14,11 @@ jobs:
   assign-dev:
     runs-on: ubuntu-latest
     environment: GraphApi
+
     steps:
 
       # LOGIN TO AZURE
-      - name: DEV Azure Login
+      - name: Azure Login
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -25,30 +26,87 @@ jobs:
           allow-no-subscriptions: true
           enable-AzPSSession: true
 
-      - name: Assign Wave1
+      - name: Assign Wave1 (Ring Aware)
         shell: pwsh
         run: |
+
+          Write-Host "Wave1 Group ID: $env:DEV_GROUP_ID"
+
+          if (-not $env:DEV_GROUP_ID) {
+              throw "DEV_GROUP_ID is not set."
+          }
+
+          # Get Graph token from Azure CLI session
           $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
           $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
-          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
-          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
-          Connect-MgGraph -AccessToken $SecureToken
 
-          $policies = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
+          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+
+          Connect-MgGraph -AccessToken $SecureToken
+          Select-MgProfile beta
+
+          # Get all configuration policies
+          $policies = Invoke-MgGraphRequest `
+              -Method GET `
+              -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
 
           foreach ($policy in $policies.value) {
 
-              $assignBody = @{
-                  assignments = @(
-                      @{
-                          target = @{
-                              "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                              groupId = $env:WAVE1_GROUP_ID
-                          }
+              Write-Host "Processing policy: $($policy.name)"
+
+              # Get existing assignments
+              $existingAssignments = Invoke-MgGraphRequest `
+                  -Method GET `
+                  -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$($policy.id)/assignments"
+
+              $assignmentArray = @()
+
+              # Preserve existing assignments
+              if ($existingAssignments.value) {
+                  foreach ($assignment in $existingAssignments.value) {
+                      $assignmentArray += @{
+                          target = $assignment.target
                       }
-                  )
+                  }
               }
 
-              Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$($policy.id)/assign" -Body ($assignBody | ConvertTo-Json -Depth 10)
+              # Check if Wave1 already assigned
+              $alreadyAssigned = $false
+
+              if ($existingAssignments.value) {
+                  foreach ($assignment in $existingAssignments.value) {
+                      if ($assignment.target.groupId -eq $env:DEV_GROUP_ID) {
+                          $alreadyAssigned = $true
+                          break
+                      }
+                  }
+              }
+
+              if ($alreadyAssigned) {
+                  Write-Host "Wave1 already assigned. Skipping."
+                  continue
+              }
+
+              Write-Host "Appending Wave1 assignment."
+
+              # Append Wave1 group
+              $assignmentArray += @{
+                  target = @{
+                      "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                      groupId      = $env:DEV_GROUP_ID
+                  }
+              }
+
+              $assignBody = @{
+                  assignments = $assignmentArray
+              }
+
+              # Re-post full assignment set (Graph replaces assignments)
+              Invoke-MgGraphRequest `
+                  -Method POST `
+                  -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$($policy.id)/assign" `
+                  -Body ($assignBody | ConvertTo-Json -Depth 10)
+
+              Write-Host "Wave1 assigned successfully."
           }
