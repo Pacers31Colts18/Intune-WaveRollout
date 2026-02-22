@@ -1,0 +1,46 @@
+name: import-intune-policy
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "policies/*.json"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - name: Install Graph
+        shell: pwsh
+        run: Install-Module Microsoft.Graph -Scope CurrentUser -Force
+
+      - name: Import Policies
+        shell: pwsh
+        run: |
+          Connect-MgGraph -TenantId $env:TENANT_ID -ClientId $env:CLIENT_ID -Identity
+
+          $files = Get-ChildItem "./policies/*.json"
+
+          foreach ($file in $files) {
+
+              $policy = Get-Content $file.FullName -Raw | ConvertFrom-Json
+
+              # Check for existing policy
+              $existing = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$($policy.name)'"
+
+              if ($existing.value.Count -lt 1) {
+                  Write-Output "Creating $($policy.name)"
+                  Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" -Body ($policy | ConvertTo-Json -Depth 100)
+              }
+          }
