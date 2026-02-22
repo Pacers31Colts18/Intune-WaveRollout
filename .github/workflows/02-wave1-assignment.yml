@@ -1,9 +1,10 @@
 name: 02-assign-wave1
 
 on:
-  push:
-    paths:
-      - "changelog/*.txt"
+  workflow_run:
+    workflows: ["01-import-intune-policy"]
+    types:
+      - completed
 
 permissions:
   id-token: write
@@ -11,6 +12,7 @@ permissions:
 
 jobs:
   wave1:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: GraphApi
 
@@ -42,6 +44,11 @@ jobs:
           $content = Get-Content $latestFile.FullName
           $policyNames = $content | Where-Object { $_ -like "- *" } |
                          ForEach-Object { $_.Substring(2) }
+
+          if (-not $policyNames) {
+              Write-Host "No policies to assign."
+              exit 0
+          }
 
           $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
           $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
