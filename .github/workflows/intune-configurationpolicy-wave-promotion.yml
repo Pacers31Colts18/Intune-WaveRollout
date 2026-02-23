@@ -5,6 +5,9 @@ on:
     - cron: '0 2 * * *'   # Daily 2AM UTC
   workflow_dispatch:
 
+env:
+  REPO_DIR: ${{ github.workspace }}
+
 permissions:
   id-token: write
   contents: read
@@ -27,6 +30,7 @@ jobs:
 
       - name: Process Staging File
         shell: pwsh
+        working-directory: ${{ github.workspace }}
         run: |
 
           Write-Host "Starting scheduled Intune deployment..."
