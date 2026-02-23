@@ -36,7 +36,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Import policies and capture IDs
+            - name: Import policies and capture IDs
         id: save_ids
         shell: pwsh
         run: |
@@ -58,12 +58,30 @@ jobs:
           foreach ($file in $uniquePolicies) {
               $policyName = $file.Replace(".json","")
 
-              $existing = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/`?$filter=name eq '$policyName'" 
-              if ($existing.value.Count -gt 0) {
-                  $policyId = $existing.value[0].id
+              # Load the JSON policy file if it exists
+              $jsonPath = "${{ github.workspace }}/policies/$file"
+              if (Test-Path $jsonPath) {
+                  $json = Get-Content $jsonPath -Raw | ConvertFrom-Json
+
+                  # Remove read-only/system-managed properties
+                  $json.PSObject.Properties.Remove('id')
+                  $json.PSObject.Properties.Remove('createdDateTime')
+                  $json.PSObject.Properties.Remove('lastModifiedDateTime')
+                  $json.PSObject.Properties.Remove('version')
+                  $json.PSObject.Properties.Remove('supportedScopeTags')
               } else {
-                  $body = @{ name = $policyName; "@odata.type"="#microsoft.graph.deviceConfiguration" }
-                  $created = Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" -Body ($body | ConvertTo-Json -Depth 10)
+                  $json = @{ name = $policyName; "@odata.type"="#microsoft.graph.deviceConfiguration" }
+              }
+
+              # Check if policy already exists
+              $existing = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
+              if ($existing.value.Count -gt 0) {
+                  # PATCH existing policy
+                  $policyId = $existing.value[0].id
+                  Invoke-MgGraphRequest -Method PATCH -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId" -Body ($json | ConvertTo-Json -Depth 100)
+              } else {
+                  # POST new policy
+                  $created = Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" -Body ($json | ConvertTo-Json -Depth 100)
                   $policyId = $created.id
               }
 
@@ -71,6 +89,7 @@ jobs:
               Write-Host "Imported '$policyName' -> $policyId"
           }
 
+          # Output the mapping for downstream jobs
           $jsonOutput = $policyIds | ConvertTo-Json -Compress
           echo "policy_ids=$jsonOutput" >> $GITHUB_OUTPUT
 
