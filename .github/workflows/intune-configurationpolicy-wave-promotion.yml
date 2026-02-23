@@ -46,8 +46,6 @@ jobs:
           $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
           $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
-      
-          # Connect to Microsoft Graph
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
           Connect-MgGraph -AccessToken $SecureToken
