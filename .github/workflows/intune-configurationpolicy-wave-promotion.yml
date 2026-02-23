@@ -1,17 +1,16 @@
-name: Intune Configuration Policy Lifecycle
+name: "Intune Policy Lifecycle"
 
 on:
-  workflow_dispatch:      # Manual trigger
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, labeled]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *'
 
 permissions:
   id-token: write
   contents: write
   pull-requests: write
-
-env:
-  REPO_DIR: ${{ github.workspace }}
 
 jobs:
 
@@ -22,10 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: Import
     outputs:
-      imported_file: ${{ steps.save_ids.outputs.imported_file }}
+      policy_ids: ${{ steps.save_ids.outputs.policy_ids }}
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -37,7 +36,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Import policies from PR
+      - name: Import policies and capture IDs
         id: save_ids
         shell: pwsh
         run: |
@@ -46,8 +45,7 @@ jobs:
 
           $staging = Import-Csv $stagingPath
           $uniquePolicies = $staging.FileName | Sort-Object -Unique
-
-          $importedPolicies = @{}
+          $policyIds = @{}
 
           $tokenResp = az account get-access-token --resource https://graph.microsoft.com
           $graphToken = ($tokenResp | ConvertFrom-Json).accessToken
@@ -58,28 +56,23 @@ jobs:
           Connect-MgGraph -AccessToken $secureToken
 
           foreach ($file in $uniquePolicies) {
-              $jsonPath = "${{ github.workspace }}/policies/$file"
-              if (-not (Test-Path $jsonPath)) { Write-Host "Skipping $file"; continue }
-
-              $json = Get-Content $jsonPath -Raw | ConvertFrom-Json
-              $policyName = $json.name
+              $policyName = $file.Replace(".json","")
 
               $existing = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
               if ($existing.value.Count -gt 0) {
                   $policyId = $existing.value[0].id
-                  Invoke-MgGraphRequest -Method PATCH -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId" -Body ($json | ConvertTo-Json -Depth 100)
               } else {
-                  $created = Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" -Body ($json | ConvertTo-Json -Depth 100)
+                  $body = @{ name = $policyName; "@odata.type"="#microsoft.graph.deviceConfiguration" }
+                  $created = Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" -Body ($body | ConvertTo-Json -Depth 10)
                   $policyId = $created.id
               }
 
-              $importedPolicies[$file] = $policyId
-              Write-Host "Policy '$policyName' imported successfully with ID $policyId."
+              $policyIds[$file] = $policyId
+              Write-Host "Imported '$policyName' -> $policyId"
           }
 
-          $importedFile = "${{ github.workspace }}/imported-policies.json"
-          $importedPolicies | ConvertTo-Json | Out-File -FilePath $importedFile -Encoding UTF8
-          echo "imported_file=$importedFile" >> $GITHUB_OUTPUT
+          $jsonOutput = $policyIds | ConvertTo-Json -Compress
+          echo "policy_ids=$jsonOutput" >> $GITHUB_OUTPUT
 
   # -------------------------
   # Apply Assignments
@@ -87,9 +80,10 @@ jobs:
   assign:
     needs: import
     runs-on: ubuntu-latest
-    environment: Wave1
+    environment: Wave
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -101,17 +95,14 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Apply Assignments
+      - name: Apply assignments from CSV
         shell: pwsh
         run: |
           $stagingPath = "${{ github.workspace }}/staging.csv"
-          $idFile = "${{ needs.import.outputs.imported_file }}"
-
           if (-not (Test-Path $stagingPath)) { Write-Host "No staging.csv found"; exit 0 }
-          if (-not (Test-Path $idFile)) { Write-Host "No imported-policies.json found"; exit 1 }
 
-          $policyIds = Get-Content $idFile -Raw | ConvertFrom-Json
-          $staging = Import-Csv $stagingPath
+          $deployments = Import-Csv $stagingPath
+          $policyIds = ${{ fromJson(needs.import.outputs.policy_ids) }}
 
           $tokenResp = az account get-access-token --resource https://graph.microsoft.com
           $graphToken = ($tokenResp | ConvertFrom-Json).accessToken
@@ -121,61 +112,60 @@ jobs:
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
           Connect-MgGraph -AccessToken $secureToken
 
-          foreach ($deploy in $staging) {
+          foreach ($deploy in $deployments) {
               $file = $deploy.FileName
-              if (-not $policyIds.ContainsKey($file)) {
-                  Write-Host "Policy $file not imported; skipping assignment"
-                  continue
-              }
-
+              if (-not $policyIds.ContainsKey($file)) { continue }
               $policyId = $policyIds[$file]
 
-              # Determine filter if provided
-              $filterId = $null
-              if ($deploy.Filter) {
-                  $filterResp = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$($deploy.Filter)'"
-                  if ($filterResp.value.Count -gt 0) { $filterId = $filterResp.value[0].id }
-                  else { Write-Host "Filter '$($deploy.Filter)' not found, skipping filter for $file" }
+              $existingAssignments = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments"
+
+              # Build assignment objects for each include group
+              $includeGroups = $deploy.IncludeGroups -split ";" | Where-Object { $_ }
+              $excludeGroups = $deploy.ExcludeGroups -split ";" | Where-Object { $_ }
+
+              $assignmentsToApply = @()
+
+              foreach ($g in $includeGroups) {
+                  $assignment = @{
+                      target = @{
+                          "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                          groupId = $g
+                      }
+                  }
+                  # apply filter if present
+                  if ($deploy.Filter) {
+                      $filter = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurationAssignmentFilters?`$filter=displayName eq '$($deploy.Filter)'"
+                      if ($filter.value.Count -gt 0) {
+                          $assignment.target.filterId = $filter.value[0].id
+                          $assignment.target.filterType = $filter.value[0].deviceAndAppManagementAssignmentFilterType
+                          $assignment.target.filterMode = $deploy.FilterMode
+                      }
+                  }
+                  $assignmentsToApply += $assignment
               }
 
-              $targetGroupId = $deploy.GroupId
-              $mode = $deploy.FilterMode  # Include / Exclude
-
-              # Fetch existing assignments
-              $existing = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments"
-
-              $bodyAssignments = @()
-
-              if ($targetGroupId -eq "AllUsers" -or $targetGroupId -eq "AllDevices") {
-                  # Replace assignments
-                  $bodyAssignments += @{
-                      target = @{
-                          "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                          groupId = $targetGroupId
-                      }
-                      filterId = $filterId
-                      filterMode = $mode
-                  }
-              } else {
-                  # Accumulate assignments
-                  $bodyAssignments = $existing.value | ForEach-Object {
-                      @{
-                        target = $_.target
-                        filterId = $_.filterId
-                        filterMode = $_.filterMode
-                      }
-                  }
-                  $bodyAssignments += @{
-                      target = @{
-                          "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                          groupId = $targetGroupId
-                      }
-                      filterId = $filterId
-                      filterMode = $mode
+              # If All Devices or All Users is in includeGroups, remove previous assignments
+              if ($includeGroups -contains ${{ secrets.ALLDEVICES_GROUP_ID }} -or $includeGroups -contains ${{ secrets.ALLUSERS_GROUP_ID }}) {
+                  foreach ($a in $existingAssignments.value) {
+                      Invoke-MgGraphRequest -Method DELETE -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments/$($a.id)"
                   }
               }
 
-              $assignBody = @{ assignments = $bodyAssignments }
-              Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" -Body ($assignBody | ConvertTo-Json -Depth 10)
-              Write-Host "Policy $file assigned to $targetGroupId (Filter: $($deploy.Filter), Mode: $mode)"
-          }
+              # Apply new assignments
+              foreach ($a in $assignmentsToApply) {
+                  Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" -Body ($a | ConvertTo-Json -Depth 10)
+              }
+
+              # Apply exclude groups (always accumulate)
+              foreach ($g in $excludeGroups) {
+                  $assignment = @{
+                      target = @{
+                          "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                          groupId = $g
+                      }
+                      @{"exclude" = $true}
+                  }
+                  Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" -Body ($assignment | ConvertTo-Json -Depth 10)
+              }
+
+              Write-Host "Applied assignments for '$file'"
