@@ -1,24 +1,15 @@
-policy: test_joe2.json
-currentWave: Wave1
 
-waves:
-  - name: Wave1
-    assignments:
-      - group: JoeLoveless-WIN-DD-Wave1
-        type: include
-        filter: WIN - W11 - PROD
-        filterMode: include
-
-  - name: Wave2
-    assignments:
-      - group: JoeLoveless-WIN-DD-Wave2
-        type: include
-        filter: Windows-11-Only
-        filterMode: include
-
-  - name: Wave3
-    assignments:
-      - group: JoeLoveless-WIN-DD-Wave3
-        type: include
-        filter: Windows-11-Only
-        filterMode: include
+policies:
+  - file: test_joe4.json
+    wave: Wave1
+    deployTime: "2026-02-23T15:00:00Z"  # ISO 8601 UTC
+    includeGroups:
+      - JoeLoveless-WIN-DD-Wave1
+    wave: Wave2
+    deployTime: "2026-02-24T15:00:00Z"  # ISO 8601 UTC
+    includeGroups:
+      - JoeLoveless-WIN-DD-Wave2
+    wave: Wave3
+    deployTime: "2026-02-25T15:00:00Z"  # ISO 8601 UTC
+    includeGroups:
+      - JoeLoveless-WIN-DD-Wave3
