@@ -1,11 +1,10 @@
-name: Intune Configuration Policy Lifecycle
+name: Intune Policy Step-by-Step PR
 
 on:
   pull_request:
     types: [opened, synchronize]
     branches:
       - main
-  workflow_dispatch:
 
 permissions:
   id-token: write
@@ -17,19 +16,16 @@ env:
 
 jobs:
   # -------------------------
-  # Import Policies
+  # Import Policy
   # -------------------------
   import:
     name: Import Policies
     runs-on: ubuntu-latest
-    environment: GraphApi
     outputs:
       policy_ids: ${{ steps.capture_ids.outputs.policy_ids }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Azure Login
         uses: azure/login@v2
@@ -56,47 +52,58 @@ jobs:
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
           Connect-MgGraph -AccessToken $SecureToken
 
+          $staging = Import-Csv -Path $csvPath
           $policyIds = @()
 
-          $staging = Import-Csv -Path $csvPath
+          $policiesToImport = $staging | Group-Object FileName
 
-          foreach ($row in $staging) {
-              $filePath = "${{ github.workspace }}/policies/$($row.FileName)"
+          foreach ($group in $policiesToImport) {
+              $filePath = "${{ github.workspace }}/policies/$($group.Name)"
               if (-not (Test-Path $filePath)) { Write-Host "Policy file $filePath not found"; continue }
 
               $json = Get-Content $filePath -Raw | ConvertFrom-Json
 
-              # Remove read-only properties
               foreach ($prop in @('id','createdDateTime','lastModifiedDateTime','version','supportedScopeTags')) {
                   if ($json.PSObject.Properties.Match($prop)) { $json.PSObject.Properties.Remove($prop) }
               }
 
-              # Create policy
-              $createdRaw = Invoke-MgGraphRequest -Method POST `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
-                -Body ($json | ConvertTo-Json -Depth 100)
+              $existingRaw = Invoke-MgGraphRequest -Method GET `
+                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$($json.name)'"
 
-              try { $created = $createdRaw | ConvertFrom-Json } catch { $created = $null }
+              try { $existing = $existingRaw | ConvertFrom-Json } catch { $existing = @{ value=@() } }
 
-              if ($created -ne $null -and $created.id) {
-                  $policyIds += @{ Name = $json.name; Id = $created.id; DeployTime = $row.DeployTime; IncludeGroups = $row.IncludeGroups; ExcludeGroups = $row.ExcludeGroups; Filter = $row.Filter; FilterMode = $row.FilterMode }
-                  Write-Host "Imported policy $($json.name) with ID $($created.id)"
+              if ($existing.value.Count -gt 0) {
+                  $policyId = $existing.value[0].id
+                  Invoke-MgGraphRequest -Method PATCH `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId" `
+                    -Body ($json | ConvertTo-Json -Depth 100)
+                  Write-Host "Updated policy $($json.name) ID $policyId"
+              } else {
+                  $createdRaw = Invoke-MgGraphRequest -Method POST `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
+                    -Body ($json | ConvertTo-Json -Depth 100)
+                  try { $created = $createdRaw | ConvertFrom-Json } catch { $created = $null }
+                  if ($created -ne $null -and $created.id) { $policyId = $created.id }
+                  else { Write-Host "Failed to import $($json.name)"; continue }
+                  Write-Host "Imported policy $($json.name) ID $policyId"
               }
+
+              $policyIds += @{ Name = $json.name; Id = $policyId }
           }
 
-          # Pass policy IDs as JSON string to outputs
-          $policyIdsJson = $policyIds | ConvertTo-Json -Depth 10
-          echo "policy_ids=$policyIdsJson" >> $GITHUB_OUTPUT
+          echo "policy_ids=$($policyIds | ConvertTo-Json -Depth 10)" >> $GITHUB_OUTPUT
 
   # -------------------------
-  # Assign Policies (Manual)
+  # Assignments (Manual Step per Deployment)
   # -------------------------
   assign:
-    name: Assign Policies
+    name: Assign Policies (Manual)
     runs-on: ubuntu-latest
     needs: import
-    environment: GraphApi
-    if: ${{ github.event.workflow_dispatch }}
+    environment:
+      name: GraphApi
+      url: ${{ github.server_url }}/pull/${{ github.event.pull_request.number }}
+    if: ${{ github.event_name == 'pull_request' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -114,7 +121,7 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      - name: Assign Policies
+      - name: Apply Assignments
         shell: pwsh
         run: |
           $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
@@ -122,18 +129,21 @@ jobs:
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
           Connect-MgGraph -AccessToken $SecureToken
 
-          # Get the list of policies from import step
-          $policiesJson = '${{ needs.import.outputs.policy_ids }}'
-          $policies = $policiesJson | ConvertFrom-Json
+          $policyIdsJson = '${{ needs.import.outputs.policy_ids }}'
+          $policyMap = $policyIdsJson | ConvertFrom-Json
 
-          foreach ($p in $policies) {
-              $policyId = $p.Id
-              $includeGroups = $p.IncludeGroups -split ';'
-              $excludeGroups = $p.ExcludeGroups -split ';'
-              $filterName = $p.Filter
-              $filterMode = $p.FilterMode
+          $staging = Import-Csv -Path "${{ github.workspace }}/staging.csv"
 
-              # Resolve filter ID if filterName is provided
+          foreach ($row in $staging) {
+              $policy = $policyMap | Where-Object { $_.Name -eq $row.FileName -replace '.json$','' }
+              if (-not $policy) { Write-Host "Policy $($row.FileName) not imported"; continue }
+
+              $policyId = $policy.Id
+              $includeGroups = $row.IncludeGroups -split ';'
+              $excludeGroups = $row.ExcludeGroups -split ';'
+              $filterName = $row.Filter
+              $filterMode = $row.FilterMode
+
               $filterId = $null
               if ($filterName) {
                   $filterRespRaw = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$filterName'"
@@ -141,7 +151,6 @@ jobs:
                   if ($filterResp.value.Count -gt 0) { $filterId = $filterResp.value[0].id }
               }
 
-              # Include assignments
               foreach ($groupId in $includeGroups) {
                   if ($groupId) {
                       $body = @{
@@ -152,11 +161,10 @@ jobs:
                       }
                       if ($filterId -and $filterMode -eq 'Include') { $body.filterId = $filterId }
                       Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments" -Body ($body | ConvertTo-Json -Depth 10)
-                      Write-Host "Assigned policy $($p.Name) to include group $groupId"
+                      Write-Host "Assigned policy $($policy.Name) to include group $groupId"
                   }
               }
 
-              # Exclude assignments
               foreach ($groupId in $excludeGroups) {
                   if ($groupId) {
                       $body = @{
@@ -167,7 +175,7 @@ jobs:
                       }
                       if ($filterId -and $filterMode -eq 'Exclude') { $body.filterId = $filterId }
                       Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments" -Body ($body | ConvertTo-Json -Depth 10)
-                      Write-Host "Excluded policy $($p.Name) from group $groupId"
+                      Write-Host "Excluded policy $($policy.Name) from group $groupId"
                   }
               }
           }
