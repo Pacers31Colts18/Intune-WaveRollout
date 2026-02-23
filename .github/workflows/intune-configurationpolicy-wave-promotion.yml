@@ -116,95 +116,85 @@ jobs:
           $token = ($tokenResponse | ConvertFrom-Json).accessToken
           $secureToken = ConvertTo-SecureString $token -AsPlainText -Force
           Connect-MgGraph -AccessToken $secureToken
-
+          
           # Parse import output
           $policyMap = @{}
           $raw = "${{ needs.import.outputs.imported_policies }}"
-
+          
           foreach ($kv in $raw -split ';') {
               if ($kv -match "=") {
                   $parts = $kv -split '='
                   $policyMap[$parts[0]] = $parts[1]
               }
           }
-
+          
           if (-not (Test-Path "${{ env.CSV_PATH }}")) {
-              Write-Error "staging.csv not found."
+              throw "staging.csv not found."
           }
-
+          
           $rows = Import-Csv -Path "${{ env.CSV_PATH }}"
-
+          
           foreach ($row in $rows) {
-
+          
               $policyId = $policyMap[$row.FileName]
               if (-not $policyId) {
                   Write-Warning "Skipping $($row.FileName) - not imported in this PR."
                   continue
               }
-
+          
               $assignments = @()
-
+          
               # INCLUDE GROUPS
               if ($row.IncludeGroups) {
-              
+          
                   foreach ($g in $row.IncludeGroups -split ',') {
-              
+          
                       $groupName = $g.Trim()
-              
+          
                       $groupResponse = Invoke-MgGraphRequest -Method GET `
                         -Uri "https://graph.microsoft.com/beta/groups?`$filter=displayName eq '$groupName'"
-              
+          
                       $group = $groupResponse.value | Select-Object -First 1
-              
-                      if (-not $group) {
-                          Write-Warning "Group not found: $groupName"
-                          continue
-                      }
-              
+                      if (-not $group) { continue }
+          
                       $target = @{
                           "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
                           groupId       = $group.id
                       }
-              
-                      # FILTER SUPPORT
+          
+                      # FILTER
                       if ($row.Filter -and $row.FilterMode) {
-              
-                          $filterName = $row.Filter.Trim()
-              
+          
                           $filterResponse = Invoke-MgGraphRequest -Method GET `
-                            -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$filterName'"
-              
+                            -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$($row.Filter)'"
+          
                           $filter = $filterResponse.value | Select-Object -First 1
-              
+          
                           if ($filter) {
                               $target.deviceAndAppManagementAssignmentFilterId   = $filter.id
                               $target.deviceAndAppManagementAssignmentFilterType = $row.FilterMode.ToLower()
                           }
                       }
-              
+          
                       $assignments += @{
                           target = $target
                       }
                   }
               }
-              
+          
               # EXCLUDE GROUPS
               if ($row.ExcludeGroups) {
-              
+          
                   foreach ($g in $row.ExcludeGroups -split ',') {
-              
+          
                       $groupName = $g.Trim()
-              
+          
                       $groupResponse = Invoke-MgGraphRequest -Method GET `
                         -Uri "https://graph.microsoft.com/beta/groups?`$filter=displayName eq '$groupName'"
-              
+          
                       $group = $groupResponse.value | Select-Object -First 1
-              
-                      if (-not $group) {
-                          Write-Warning "Exclude group not found: $groupName"
-                          continue
-                      }
-              
+                      if (-not $group) { continue }
+          
                       $assignments += @{
                           target = @{
                               "@odata.type" = "#microsoft.graph.exclusionGroupAssignmentTarget"
@@ -213,3 +203,21 @@ jobs:
                       }
                   }
               }
+          
+              # APPLY ASSIGNMENTS
+              if ($assignments.Count -gt 0) {
+          
+                  $body = @{
+                      assignments = $assignments
+                  }
+          
+                  Invoke-MgGraphRequest -Method POST `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
+                    -Body ($body | ConvertTo-Json -Depth 10)
+          
+                  Write-Host "Assignments applied to $($row.FileName)"
+              }
+          
+          }  # <-- closes foreach row
+          
+          Write-Host "Assignment job complete."
