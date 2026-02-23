@@ -1,49 +1,41 @@
-name: Intune Configuration Policy Lifecycle
+name: Intune Scheduled Policy Deployment
 
 on:
-  pull_request:
-    types: [labeled]
-    branches:
-      - main
+  schedule:
+    - cron: '0 2 * * *'   # Daily 2AM UTC
+  workflow_dispatch:
 
 permissions:
   id-token: write
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
-
-  # -------------------------
-  # Import Job
-  # -------------------------
-  import:
-    if: contains(github.event.pull_request.labels.*.name, 'import-policy')
+  deploy:
     runs-on: ubuntu-latest
-    environment: Import
+    environment: Prod
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Azure Login
+      - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Import Policies (No Assignments)
+      - name: Process Staging File
         shell: pwsh
         run: |
-          $base = "${{ github.event.pull_request.base.sha }}"
-          $head = "${{ github.event.pull_request.head.sha }}"
 
-          $changedFiles = git diff --name-only $base $head |
-                          Where-Object { $_ -like "policies/*.json" }
+          Write-Host "Starting scheduled Intune deployment..."
 
-          if (-not $changedFiles) {
-              Write-Host "No policy changes detected."
+          $today = (Get-Date).ToString("yyyy-MM-dd")
+          Write-Host "Today: $today"
+
+          if (-not (Test-Path "staging.csv")) {
+              Write-Host "No staging.csv found."
               exit 0
           }
 
@@ -55,93 +47,80 @@ jobs:
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
           Connect-MgGraph -AccessToken $SecureToken
 
-          foreach ($file in $changedFiles) {
-              $json = Get-Content $file -Raw | ConvertFrom-Json
+          $staging = Import-Csv "staging.csv"
+
+          $dueItems = $staging | Where-Object {
+              $_.DeploymentDate -le $today
+          }
+
+          if (-not $dueItems) {
+              Write-Host "No deployments scheduled for today."
+              exit 0
+          }
+
+          foreach ($item in $dueItems) {
+
+              $filePath = "policies/$($item.FileName)"
+
+              if (-not (Test-Path $filePath)) {
+                  Write-Host "Policy file missing: $filePath"
+                  continue
+              }
+
+              $json = Get-Content $filePath -Raw | ConvertFrom-Json
               $policyName = $json.name
 
+              Write-Host "Processing policy: $policyName"
+              Write-Host "Target group: $($item.GroupName)"
+
+              # Check if policy exists
               $existing = Invoke-MgGraphRequest `
                 -Method GET `
                 -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
 
-              if ($existing.value.Count -gt 0) {
-                  $policyId = $existing.value[0].id
-                  Invoke-MgGraphRequest `
-                    -Method PATCH `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId" `
-                    -Body ($json | ConvertTo-Json -Depth 100)
-              }
-              else {
+              if ($existing.value.Count -eq 0) {
+                  Write-Host "Policy not found. Creating..."
                   $created = Invoke-MgGraphRequest `
                     -Method POST `
                     -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
                     -Body ($json | ConvertTo-Json -Depth 100)
                   $policyId = $created.id
               }
+              else {
+                  $policyId = $existing.value[0].id
+                  Write-Host "Policy already exists."
+              }
 
-              # Remove all assignments for import
+              # Get group by name dynamically
+              $group = Invoke-MgGraphRequest `
+                -Method GET `
+                -Uri "https://graph.microsoft.com/v1.0/groups?`$filter=displayName eq '$($item.GroupName)'"
+
+              if ($group.value.Count -eq 0) {
+                  Write-Host "Group not found: $($item.GroupName)"
+                  continue
+              }
+
+              $groupId = $group.value[0].id
+
+              # Check existing assignments
               $assignments = Invoke-MgGraphRequest `
                 -Method GET `
                 -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments"
+
+              $alreadyAssigned = $false
               foreach ($a in $assignments.value) {
-                  Invoke-MgGraphRequest `
-                    -Method DELETE `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments/$($a.id)"
+                  if ($a.target.groupId -eq $groupId) {
+                      $alreadyAssigned = $true
+                  }
               }
 
-              Write-Host "Policy '$policyName' imported successfully with no assignments."
-          }
-
-  # -------------------------
-  # Promote Wave1
-  # -------------------------
-  promote-wave1:
-    if: contains(github.event.pull_request.labels.*.name, 'promote-wave1')
-    runs-on: ubuntu-latest
-    environment: Wave1
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          allow-no-subscriptions: true
-
-      - name: Promote to Wave1
-        shell: pwsh
-        run: |
-          $changedFiles = git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} |
-                          Where-Object { $_ -like "policies/*.json" }
-
-          if (-not $changedFiles) { exit 0 }
-
-          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
-          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
-
-          $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
-          $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
-          $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
-          Connect-MgGraph -AccessToken $SecureToken
-
-          foreach ($file in $changedFiles) {
-              $json = Get-Content $file -Raw | ConvertFrom-Json
-              $policyName = $json.name
-
-              $existing = Invoke-MgGraphRequest `
-                -Method GET `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
-
-              if ($existing.value.Count -eq 0) {
-                  Write-Host "Policy must be imported first!"
-                  exit 1
+              if ($alreadyAssigned) {
+                  Write-Host "Already assigned to $($item.GroupName). Skipping."
+                  continue
               }
 
-              $policyId = $existing.value[0].id
-              $groupId = "${{ secrets.WAVE1_GROUP_ID }}"
+              # Assign (accumulative)
               $assignmentBody = @{
                 assignments = @(
                   @{
@@ -157,226 +136,8 @@ jobs:
                 -Method POST `
                 -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
                 -Body ($assignmentBody | ConvertTo-Json -Depth 10)
-              Write-Host "Policy '$policyName' promoted to Wave1"
+
+              Write-Host "Successfully assigned to $($item.GroupName)"
           }
 
-  # -------------------------
-  # Promote Wave2
-  # -------------------------
-  promote-wave2:
-    if: contains(github.event.pull_request.labels.*.name, 'promote-wave2')
-    runs-on: ubuntu-latest
-    environment: Wave2
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          allow-no-subscriptions: true
-
-      - name: Promote to Wave2
-        shell: pwsh
-        run: |
-          $changedFiles = git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} |
-                          Where-Object { $_ -like "policies/*.json" }
-
-          if (-not $changedFiles) { exit 0 }
-
-          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
-          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
-
-          $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
-          $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
-          $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
-          Connect-MgGraph -AccessToken $SecureToken
-
-          foreach ($file in $changedFiles) {
-              $json = Get-Content $file -Raw | ConvertFrom-Json
-              $policyName = $json.name
-
-              $existing = Invoke-MgGraphRequest `
-                -Method GET `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
-
-              if ($existing.value.Count -eq 0) {
-                  Write-Host "Policy must be imported first!"
-                  exit 1
-              }
-
-              $policyId = $existing.value[0].id
-              $groupId = "${{ secrets.WAVE2_GROUP_ID }}"
-              $assignmentBody = @{
-                assignments = @(
-                  @{
-                    target = @{
-                      "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                      groupId = $groupId
-                    }
-                  }
-                )
-              }
-
-              Invoke-MgGraphRequest `
-                -Method POST `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
-                -Body ($assignmentBody | ConvertTo-Json -Depth 10)
-              Write-Host "Policy '$policyName' promoted to Wave2"
-          }
-
-  # -------------------------
-  # Promote Wave3
-  # -------------------------
-  promote-wave3:
-    if: contains(github.event.pull_request.labels.*.name, 'promote-wave3')
-    runs-on: ubuntu-latest
-    environment: Wave3
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          allow-no-subscriptions: true
-
-      - name: Promote to Wave3
-        shell: pwsh
-        run: |
-          $changedFiles = git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} |
-                          Where-Object { $_ -like "policies/*.json" }
-
-          if (-not $changedFiles) { exit 0 }
-
-          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
-          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
-
-          $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
-          $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
-          $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
-          Connect-MgGraph -AccessToken $SecureToken
-
-          foreach ($file in $changedFiles) {
-              $json = Get-Content $file -Raw | ConvertFrom-Json
-              $policyName = $json.name
-
-              $existing = Invoke-MgGraphRequest `
-                -Method GET `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
-
-              if ($existing.value.Count -eq 0) {
-                  Write-Host "Policy must be imported first!"
-                  exit 1
-              }
-
-              $policyId = $existing.value[0].id
-              $groupId = "${{ secrets.WAVE3_GROUP_ID }}"
-              $assignmentBody = @{
-                assignments = @(
-                  @{
-                    target = @{
-                      "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                      groupId = $groupId
-                    }
-                  }
-                )
-              }
-
-              Invoke-MgGraphRequest `
-                -Method POST `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
-                -Body ($assignmentBody | ConvertTo-Json -Depth 10)
-              Write-Host "Policy '$policyName' promoted to Wave3"
-          }
-
-  # -------------------------
-  # Promote Prod
-  # -------------------------
-  promote-prod:
-    if: contains(github.event.pull_request.labels.*.name, 'promote-prod')
-    runs-on: ubuntu-latest
-    environment: Prod
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          allow-no-subscriptions: true
-
-      - name: Promote to Prod
-        shell: pwsh
-        run: |
-          $changedFiles = git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} |
-                          Where-Object { $_ -like "policies/*.json" }
-
-          if (-not $changedFiles) { exit 0 }
-
-          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
-          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
-
-          $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
-          $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
-          $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
-          Connect-MgGraph -AccessToken $SecureToken
-
-          foreach ($file in $changedFiles) {
-              $json = Get-Content $file -Raw | ConvertFrom-Json
-              $policyName = $json.name
-
-              $existing = Invoke-MgGraphRequest `
-                -Method GET `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
-
-              if ($existing.value.Count -eq 0) {
-                  Write-Host "Policy must be imported first!"
-                  exit 1
-              }
-
-              $policyId = $existing.value[0].id
-              $groupId = "${{ secrets.PROD_GROUP_ID }}"
-              $assignmentBody = @{
-                assignments = @(
-                  @{
-                    target = @{
-                      "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                      groupId = $groupId
-                    }
-                  }
-                )
-              }
-
-              Invoke-MgGraphRequest `
-                -Method POST `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
-                -Body ($assignmentBody | ConvertTo-Json -Depth 10)
-              Write-Host "Policy '$policyName' promoted to Prod"
-          }
-
-  # -------------------------
-  # Auto-Merge Prod PR
-  # -------------------------
-  auto-merge:
-    if: contains(github.event.pull_request.labels.*.name, 'promote-prod')
-    needs: promote-prod
-    runs-on: ubuntu-latest
-    steps:
-      - name: Enable Auto Merge
-        uses: peter-evans/enable-pull-request-automerge@v3
-        with:
-          pull-request-number: ${{ github.event.pull_request.number }}
-          merge-method: squash
+          Write-Host "Deployment cycle completed."
