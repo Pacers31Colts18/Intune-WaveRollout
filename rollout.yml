@@ -2,7 +2,7 @@
 policies:
   - file: test_joe4.json
     wave: Wave1
-    deployTime: "2026-02-23T15:00:00Z"  # ISO 8601 UTC
+    deployTime: "2026-02-23T13:00:00Z"  # ISO 8601 UTC
     includeGroups:
       - JoeLoveless-WIN-DD-Wave1
     wave: Wave2
