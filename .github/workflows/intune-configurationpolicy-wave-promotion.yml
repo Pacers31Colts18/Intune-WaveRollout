@@ -49,45 +49,50 @@ jobs:
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
           Connect-MgGraph -AccessToken $SecureToken
 
+          # Read CSV
           $rows = Import-Csv -Path "${{ env.CSV_PATH }}"
-          $policyIds = @()
-
-          foreach ($row in $rows) {
+          
+          # De-duplicate FileNames
+          $uniquePolicies = $rows | Select-Object -Property FileName -Unique
+          
+          $policyIds = @{}
+          
+          foreach ($row in $uniquePolicies) {
               $jsonPath = "${{ github.workspace }}/policies/$($row.FileName)"
               if (-not (Test-Path $jsonPath)) { continue }
-
+          
               $json = Get-Content $jsonPath -Raw | ConvertFrom-Json
-
-              # Remove read-only/extraneous properties
+          
+              # Remove readonly/extraneous properties
               $json.PSObject.Properties.Remove('id')
               $json.PSObject.Properties.Remove('createdDateTime')
               $json.PSObject.Properties.Remove('lastModifiedDateTime')
               $json.PSObject.Properties.Remove('version')
               $json.PSObject.Properties.Remove('supportedScopeTags')
-
-              # Create or update policy
+          
+              # Create or update
               $existingRaw = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$($json.name)'"
               try { $existing = $existingRaw | ConvertFrom-Json } catch { $existing = @{value=@()} }
-
+          
               if ($existing.value.Count -gt 0) {
                   $policyId = $existing.value[0].id
                   Invoke-MgGraphRequest -Method PATCH `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId" `
-                    -Body ($json | ConvertTo-Json -Depth 10)
+                      -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId" `
+                      -Body ($json | ConvertTo-Json -Depth 10)
               } else {
                   $createdRaw = Invoke-MgGraphRequest -Method POST `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
-                    -Body ($json | ConvertTo-Json -Depth 10)
+                      -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
+                      -Body ($json | ConvertTo-Json -Depth 10)
                   $created = $createdRaw | ConvertFrom-Json
                   $policyId = $created.id
               }
-
-              $policyIds += "$($row.FileName)=$policyId"
-              Write-Host "Policy '$($json.name)' imported with ID $policyId"
+          
+              $policyIds[$row.FileName] = $policyId
+              Write-Host "Imported policy '$($json.name)' once with ID $policyId"
           }
-
-          # Expose policy IDs as output for downstream steps
-          $allIds = $policyIds -join ';'
+          
+          # Export mapping for assignment step
+          $allIds = $policyIds.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" } -join ';'
           echo "policy_ids=$allIds" >> $GITHUB_OUTPUT
 
   # -------------------------
