@@ -99,7 +99,7 @@ jobs:
   assign:
     needs: import
     runs-on: ubuntu-latest
-    environment: Wave
+    environment: Wave1
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
       - name: Checkout
