@@ -205,4 +205,4 @@ jobs:
               }
           }
 
-Write-Host "Assignment job complete."
+          Write-Host "Assignment job complete."
