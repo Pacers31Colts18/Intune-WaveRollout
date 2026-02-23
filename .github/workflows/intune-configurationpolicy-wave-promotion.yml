@@ -74,7 +74,7 @@ jobs:
 
               # Check if exists
               $existingRaw = Invoke-MgGraphRequest -Method GET `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
+                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/`?$filter=name eq '$policyName'"
               $existing = $existingRaw | ConvertFrom-Json
 
               if ($existing.value.Count -gt 0) {
