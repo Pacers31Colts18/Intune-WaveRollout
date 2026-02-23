@@ -2,23 +2,21 @@ name: Intune Scheduled Policy Deployment
 
 on:
   schedule:
-    - cron: '0 2 * * *'   # Daily 2AM UTC
+    - cron: '0 2 * * *'
   workflow_dispatch:
-
-env:
-  REPO_DIR: ${{ github.workspace }}
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: Prod
+    environment: GraphApi
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Azure Login (OIDC)
@@ -28,20 +26,21 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Process Staging File
+      - name: Process Deployment Queue
+        id: process
         shell: pwsh
-        working-directory: ${{ github.workspace }}
         run: |
 
-          Write-Host "Starting scheduled Intune deployment..."
+          $repoRoot = $env:GITHUB_WORKSPACE
+          $stagingPath = Join-Path $repoRoot "staging.csv"
+          $historyPath = Join-Path $repoRoot "deployment-history.csv"
 
-          $today = (Get-Date).ToString("yyyy-MM-dd")
-          Write-Host "Today: $today"
-
-          if (-not (Test-Path "staging.csv")) {
+          if (-not (Test-Path $stagingPath)) {
               Write-Host "No staging.csv found."
               exit 0
           }
+
+          $today = (Get-Date).ToString("yyyy-MM-dd")
 
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
@@ -51,97 +50,116 @@ jobs:
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
           Connect-MgGraph -AccessToken $SecureToken
 
-          $staging = Import-Csv "staging.csv"
+          $staging = Import-Csv $stagingPath
+          $due = $staging | Where-Object { $_.DeploymentDate -le $today }
 
-          $dueItems = $staging | Where-Object {
-              $_.DeploymentDate -le $today
-          }
-
-          if (-not $dueItems) {
-              Write-Host "No deployments scheduled for today."
+          if (-not $due) {
+              Write-Host "No deployments due."
               exit 0
           }
 
-          foreach ($item in $dueItems) {
+          $remaining = @()
+          $historyEntries = @()
 
-              $filePath = "policies/$($item.FileName)"
+          foreach ($item in $staging) {
 
-              if (-not (Test-Path $filePath)) {
-                  Write-Host "Policy file missing: $filePath"
-                  continue
-              }
+              if ($item.DeploymentDate -le $today) {
 
-              $json = Get-Content $filePath -Raw | ConvertFrom-Json
-              $policyName = $json.name
+                  $filePath = Join-Path $repoRoot "policies/$($item.FileName)"
 
-              Write-Host "Processing policy: $policyName"
-              Write-Host "Target group: $($item.GroupName)"
+                  if (-not (Test-Path $filePath)) {
+                      Write-Host "Missing policy file $($item.FileName)"
+                      continue
+                  }
 
-              # Check if policy exists
-              $existing = Invoke-MgGraphRequest `
-                -Method GET `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
+                  $json = Get-Content $filePath -Raw | ConvertFrom-Json
+                  $policyName = $json.name
 
-              if ($existing.value.Count -eq 0) {
-                  Write-Host "Policy not found. Creating..."
-                  $created = Invoke-MgGraphRequest `
-                    -Method POST `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
-                    -Body ($json | ConvertTo-Json -Depth 100)
-                  $policyId = $created.id
+                  $existing = Invoke-MgGraphRequest `
+                    -Method GET `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
+
+                  if ($existing.value.Count -eq 0) {
+                      $created = Invoke-MgGraphRequest `
+                        -Method POST `
+                        -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
+                        -Body ($json | ConvertTo-Json -Depth 100)
+                      $policyId = $created.id
+                  }
+                  else {
+                      $policyId = $existing.value[0].id
+                  }
+
+                  $group = Invoke-MgGraphRequest `
+                    -Method GET `
+                    -Uri "https://graph.microsoft.com/v1.0/groups?`$filter=displayName eq '$($item.GroupName)'"
+
+                  if ($group.value.Count -eq 0) {
+                      Write-Host "Group not found $($item.GroupName)"
+                      continue
+                  }
+
+                  $groupId = $group.value[0].id
+
+                  $assignments = Invoke-MgGraphRequest `
+                    -Method GET `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments"
+
+                  $alreadyAssigned = $assignments.value |
+                      Where-Object { $_.target.groupId -eq $groupId }
+
+                  if (-not $alreadyAssigned) {
+
+                      $assignmentBody = @{
+                        assignments = @(
+                          @{
+                            target = @{
+                              "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                              groupId = $groupId
+                            }
+                          }
+                        )
+                      }
+
+                      Invoke-MgGraphRequest `
+                        -Method POST `
+                        -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
+                        -Body ($assignmentBody | ConvertTo-Json -Depth 10)
+
+                      Write-Host "Assigned $policyName to $($item.GroupName)"
+                  }
+
+                  $historyEntries += [PSCustomObject]@{
+                      FileName       = $item.FileName
+                      GroupName      = $item.GroupName
+                      DeploymentDate = $item.DeploymentDate
+                      ProcessedDate  = $today
+                  }
+
               }
               else {
-                  $policyId = $existing.value[0].id
-                  Write-Host "Policy already exists."
+                  $remaining += $item
               }
-
-              # Get group by name dynamically
-              $group = Invoke-MgGraphRequest `
-                -Method GET `
-                -Uri "https://graph.microsoft.com/v1.0/groups?`$filter=displayName eq '$($item.GroupName)'"
-
-              if ($group.value.Count -eq 0) {
-                  Write-Host "Group not found: $($item.GroupName)"
-                  continue
-              }
-
-              $groupId = $group.value[0].id
-
-              # Check existing assignments
-              $assignments = Invoke-MgGraphRequest `
-                -Method GET `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments"
-
-              $alreadyAssigned = $false
-              foreach ($a in $assignments.value) {
-                  if ($a.target.groupId -eq $groupId) {
-                      $alreadyAssigned = $true
-                  }
-              }
-
-              if ($alreadyAssigned) {
-                  Write-Host "Already assigned to $($item.GroupName). Skipping."
-                  continue
-              }
-
-              # Assign (accumulative)
-              $assignmentBody = @{
-                assignments = @(
-                  @{
-                    target = @{
-                      "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                      groupId = $groupId
-                    }
-                  }
-                )
-              }
-
-              Invoke-MgGraphRequest `
-                -Method POST `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
-                -Body ($assignmentBody | ConvertTo-Json -Depth 10)
-
-              Write-Host "Successfully assigned to $($item.GroupName)"
           }
 
-          Write-Host "Deployment cycle completed."
+          # Write remaining queue
+          $remaining | Export-Csv $stagingPath -NoTypeInformation
+
+          # Append history
+          if (Test-Path $historyPath) {
+              $existingHistory = Import-Csv $historyPath
+              $historyEntries = $existingHistory + $historyEntries
+          }
+
+          $historyEntries | Export-Csv $historyPath -NoTypeInformation
+
+          echo "changes=true" >> $env:GITHUB_OUTPUT
+
+      - name: Create PR for Queue Update
+        if: steps.process.outputs.changes == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: deployment-cleanup-${{ github.run_number }}
+          commit-message: "Remove processed deployments"
+          title: "Deployment Queue Cleanup"
+          body: "Automated removal of processed deployment rows."
