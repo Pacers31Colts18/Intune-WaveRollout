@@ -156,8 +156,7 @@ jobs:
                       # FILTER SUPPORT
                       if ($row.Filter -and $row.FilterMode -and $row.FilterMode -in @("Include","Exclude")) {
 
-                          $filterResponse = Invoke-MgGraphRequest -Method GET `
-                            -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$($row.Filter)'"
+                          $filterResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters/`?$filter=$displayName -eq '$($row.Filter)'"
 
                           if ($filterResponse.value.Count -gt 0) {
                               $filter = $filterResponse.value[0]
