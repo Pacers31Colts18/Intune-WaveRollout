@@ -58,7 +58,7 @@ jobs:
           foreach ($file in $uniquePolicies) {
               $policyName = $file.Replace(".json","")
 
-              $existing = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
+              $existing = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/`?$filter=name eq '$policyName'" 
               if ($existing.value.Count -gt 0) {
                   $policyId = $existing.value[0].id
               } else {
