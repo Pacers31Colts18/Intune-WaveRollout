@@ -146,61 +146,70 @@ jobs:
 
               # INCLUDE GROUPS
               if ($row.IncludeGroups) {
+              
                   foreach ($g in $row.IncludeGroups -split ',') {
-                        $groupUri = "https://graph.microsoft.com/beta/groups/`?$filter=displayName -eq $($g.Trim())"
-                        $response = Invoke-MgGraphRequest -Method GET -Uri $groupUri
-
+              
+                      $groupName = $g.Trim()
+              
+                      $groupResponse = Invoke-MgGraphRequest -Method GET `
+                        -Uri "https://graph.microsoft.com/beta/groups?`$filter=displayName eq '$groupName'"
+              
+                      $group = $groupResponse.value | Select-Object -First 1
+              
+                      if (-not $group) {
+                          Write-Warning "Group not found: $groupName"
+                          continue
+                      }
+              
                       $target = @{
                           "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                          groupId       = $response.value.id
+                          groupId       = $group.id
                       }
-
+              
                       # FILTER SUPPORT
-                      if ($row.Filter -and $row.FilterMode -and $row.FilterMode -in @("Include","Exclude")) {
-
-                          $filterResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters/`?$filter=$displayName -eq '$($row.Filter)'"
-
-                          if ($filterResponse.value.Count -gt 0) {
-                              $filter = $filterResponse.value[0]
-
+                      if ($row.Filter -and $row.FilterMode) {
+              
+                          $filterName = $row.Filter.Trim()
+              
+                          $filterResponse = Invoke-MgGraphRequest -Method GET `
+                            -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$filterName'"
+              
+                          $filter = $filterResponse.value | Select-Object -First 1
+              
+                          if ($filter) {
                               $target.deviceAndAppManagementAssignmentFilterId   = $filter.id
-                              $target.deviceAndAppManagementAssignmentFilterType = $row.FilterMode
+                              $target.deviceAndAppManagementAssignmentFilterType = $row.FilterMode.ToLower()
                           }
                       }
-
+              
                       $assignments += @{
                           target = $target
                       }
                   }
               }
-
+              
               # EXCLUDE GROUPS
               if ($row.ExcludeGroups) {
+              
                   foreach ($g in $row.ExcludeGroups -split ',') {
-                        $groupUri = "https://graph.microsoft.com/beta/groups/`?$filter=displayName -eq $($g.Trim())"
-                        $response = Invoke-MgGraphRequest -Method GET -Uri $groupUri
-
+              
+                      $groupName = $g.Trim()
+              
+                      $groupResponse = Invoke-MgGraphRequest -Method GET `
+                        -Uri "https://graph.microsoft.com/beta/groups?`$filter=displayName eq '$groupName'"
+              
+                      $group = $groupResponse.value | Select-Object -First 1
+              
+                      if (-not $group) {
+                          Write-Warning "Exclude group not found: $groupName"
+                          continue
+                      }
+              
                       $assignments += @{
                           target = @{
                               "@odata.type" = "#microsoft.graph.exclusionGroupAssignmentTarget"
-                              groupId       = $response.value.id
+                              groupId       = $group.id
                           }
                       }
                   }
               }
-
-              if ($assignments.Count -gt 0) {
-
-                  $body = @{
-                      assignments = $assignments
-                  }
-
-                  Invoke-MgGraphRequest -Method POST `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
-                    -Body ($body | ConvertTo-Json -Depth 10)
-
-                  Write-Host "Assignments applied to $($row.FileName)"
-              }
-          }
-
-          Write-Host "Assignment job complete."
