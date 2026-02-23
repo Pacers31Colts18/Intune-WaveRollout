@@ -138,7 +138,7 @@ jobs:
           
               $policyId = $policyMap[$row.FileName]
               if (-not $policyId) {
-                  Write-Warning "Skipping $($row.FileName) - not imported in this PR."
+                  Write-Warning "Skipping $($row.FileName)"
                   continue
               }
           
@@ -151,9 +151,7 @@ jobs:
           
                       $groupName = $g.Trim()
           
-                      $groupResponse = Invoke-MgGraphRequest -Method GET `
-                        -Uri "https://graph.microsoft.com/beta/groups?`$filter=displayName eq '$groupName'"
-          
+                      $groupResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/groups?`$filter=displayName eq '$groupName'"
                       $group = $groupResponse.value | Select-Object -First 1
                       if (-not $group) { continue }
           
@@ -162,12 +160,9 @@ jobs:
                           groupId       = $group.id
                       }
           
-                      # FILTER
                       if ($row.Filter -and $row.FilterMode) {
           
-                          $filterResponse = Invoke-MgGraphRequest -Method GET `
-                            -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$($row.Filter)'"
-          
+                          $filterResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$($row.Filter)'"
                           $filter = $filterResponse.value | Select-Object -First 1
           
                           if ($filter) {
@@ -176,9 +171,7 @@ jobs:
                           }
                       }
           
-                      $assignments += @{
-                          target = $target
-                      }
+                      $assignments += @{ target = $target }
                   }
               }
           
@@ -189,9 +182,7 @@ jobs:
           
                       $groupName = $g.Trim()
           
-                      $groupResponse = Invoke-MgGraphRequest -Method GET `
-                        -Uri "https://graph.microsoft.com/beta/groups?`$filter=displayName eq '$groupName'"
-          
+                      $groupResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/groups?`$filter=displayName eq '$groupName'"
                       $group = $groupResponse.value | Select-Object -First 1
                       if (-not $group) { continue }
           
@@ -204,20 +195,14 @@ jobs:
                   }
               }
           
-              # APPLY ASSIGNMENTS
               if ($assignments.Count -gt 0) {
           
-                  $body = @{
-                      assignments = $assignments
-                  }
+                  $body = @{ assignments = $assignments }
           
-                  Invoke-MgGraphRequest -Method POST `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
-                    -Body ($body | ConvertTo-Json -Depth 10)
+                  Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" -Body ($body | ConvertTo-Json -Depth 10)
           
                   Write-Host "Assignments applied to $($row.FileName)"
               }
-          
-          }  # <-- closes foreach row
-          
-          Write-Host "Assignment job complete."
+          }
+
+Write-Host "Assignment job complete."
