@@ -40,15 +40,20 @@ jobs:
       - name: Import Policies
         shell: pwsh
         run: |
-          $prBranch = "${{ github.head_ref }}"
+          # GitHub Actions already checks out PR branch
+          # Make sure origin/main exists
+          git fetch origin main
 
-          $changedFiles = git diff --name-only origin/main $prBranch |
+          $changedFiles = git diff --name-only origin/main HEAD |
                           Where-Object { $_ -like "policies/*.json" }
 
           if (-not $changedFiles) {
               Write-Host "No policy changes detected."
               exit 0
           }
+
+          Write-Host "Changed policy files:"
+          $changedFiles | ForEach-Object { Write-Host $_ }
 
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
