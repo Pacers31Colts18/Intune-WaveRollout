@@ -6,26 +6,27 @@ on:
 
 permissions:
   id-token: write
-  contents: write
+  contents: read
   pull-requests: write
 
 env:
   REPO_DIR: ${{ github.workspace }}
-  STAGING_FOLDER: "${{ github.workspace }}/staging"
-  CSV_PATH: "${{ github.workspace }}/staging/staging.csv"
+  STAGING_FOLDER: ${{ github.workspace }}/staging
+  CSV_PATH: ${{ github.workspace }}/staging/staging.csv
 
 jobs:
 
-  # -------------------------
-  # Import Policies
-  # -------------------------
+  # =============================
+  # IMPORT POLICIES (RUNS ON PR)
+  # =============================
   import:
     runs-on: ubuntu-latest
     environment: GraphApi
     outputs:
-      imported_policies: ${{ steps.import_policies.outputs.imported_policies }}
+      imported_policies: ${{ steps.import_step.outputs.imported_policies }}
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -44,39 +45,52 @@ jobs:
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
       - name: Import Policies from Staging Folder
-        id: import_policies
+        id: import_step
         shell: pwsh
         run: |
-          $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
-          $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
-          $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
-          Connect-MgGraph -AccessToken $SecureToken
-          Import-Module -Name "${{ env.REPO_DIR }}" -Force
-          $policyFiles = Get-ChildItem "${{ env.REPO_DIR }}/staging" -File -Filter *.json
-          $policyMap = @{}
+          $ErrorActionPreference = "Stop"
 
-          foreach ($file in $policyFiles) {
-              Write-Host "Importing policy: $($file.Name)"
-              $policyId = Import-IntuneSettingsCatalogPolicy -folder "${{ env.REPO_DIR }}/staging" -fileName $file.Name
-              $policyMap[$file.Name] = $policyId
+          # Acquire token
+          $tokenResponse = az account get-access-token --resource https://graph.microsoft.com
+          $token = ($tokenResponse | ConvertFrom-Json).accessToken
+          $secureToken = ConvertTo-SecureString $token -AsPlainText -Force
+          Connect-MgGraph -AccessToken $secureToken
+
+          # Load function
+          . "${{ env.REPO_DIR }}/Public/Import-IntuneSettingsCatalogPolicy.ps1"
+
+          Write-Host "Running import on folder: ${{ env.STAGING_FOLDER }}"
+
+          # CALL FUNCTION ONCE
+          $results = Import-IntuneSettingsCatalogPolicy -folderPath "${{ env.STAGING_FOLDER }}"
+
+          if (-not $results) {
+              Write-Error "Import function returned nothing."
           }
 
-          # Clear staging folder
-          Remove-Item -Path "${{ env.REPO_DIR }}/staging/" -File -Filter *.json -Force
+          $policyMap = @{}
 
-          # Output mapping for downstream jobs
-          $allIds = $policyMap.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" } -join ';'
-          echo "imported_policies=$allIds" >> $GITHUB_OUTPUT
+          foreach ($policy in $results) {
+              Write-Host "Imported/Updated: $($policy.Name) - $($policy.Id)"
+              $policyMap[$policy.Name] = $policy.Id
+          }
 
-  # -------------------------
-  # Assign Policies
-  # -------------------------
+          $output = $policyMap.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" } -join ';'
+          echo "imported_policies=$output" >> $env:GITHUB_OUTPUT
+
+          Write-Host "Import job complete."
+  
+
+  # =============================
+  # ASSIGN POLICIES (AFTER IMPORT)
+  # =============================
   assign:
     needs: import
     runs-on: ubuntu-latest
     environment: GraphApi
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Azure Login
@@ -92,66 +106,97 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      - name: Assign Policies
+      - name: Assign Policies from CSV
         shell: pwsh
         run: |
-          $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
-          $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
-          $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
-          Connect-MgGraph -AccessToken $SecureToken
+          $ErrorActionPreference = "Stop"
 
-          # Parse imported policies
-          $policyIdsOutput = "${{ needs.import.outputs.imported_policies }}"
+          # Connect Graph
+          $tokenResponse = az account get-access-token --resource https://graph.microsoft.com
+          $token = ($tokenResponse | ConvertFrom-Json).accessToken
+          $secureToken = ConvertTo-SecureString $token -AsPlainText -Force
+          Connect-MgGraph -AccessToken $secureToken
+
+          # Parse import output
           $policyMap = @{}
-          foreach ($kv in $policyIdsOutput -split ';') {
-              $parts = $kv -split '='
-              $policyMap[$parts[0]] = $parts[1]
+          $raw = "${{ needs.import.outputs.imported_policies }}"
+
+          foreach ($kv in $raw -split ';') {
+              if ($kv -match "=") {
+                  $parts = $kv -split '='
+                  $policyMap[$parts[0]] = $parts[1]
+              }
           }
 
-          # Read CSV for assignments
-          $rows = Import-Csv -Path "${{ env.CSV_PATH }}"
-          foreach ($row in $rows) {
-              $policyId = $policyMap[$row.FileName]
-              if (-not $policyId) { continue }
+          if (-not (Test-Path "${{ env.CSV_PATH }}")) {
+              Write-Error "staging.csv not found."
+          }
 
-              $assignBody = @{
-                  assignments = @()
+          $rows = Import-Csv -Path "${{ env.CSV_PATH }}"
+
+          foreach ($row in $rows) {
+
+              $policyId = $policyMap[$row.FileName]
+              if (-not $policyId) {
+                  Write-Warning "Skipping $($row.FileName) - not imported in this PR."
+                  continue
               }
 
-              # Include groups
+              $assignments = @()
+
+              # INCLUDE GROUPS
               if ($row.IncludeGroups) {
                   foreach ($g in $row.IncludeGroups -split ',') {
+
                       $target = @{
                           "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                          groupId = $g.Trim()
+                          groupId       = $g.Trim()
                       }
-                      if ($row.FilterMode -eq "Include" -and $row.Filter) {
-                          $filterObj = @{
-                              "@odata.type" = "#microsoft.graph.deviceAndAppManagementAssignmentFilter"
-                              id = (Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$($row.Filter)'").value[0].id
-                              assignmentFilterType = (Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$($row.Filter)'").value[0].assignmentFilterType
+
+                      # FILTER SUPPORT
+                      if ($row.Filter -and $row.FilterMode -and $row.FilterMode -in @("Include","Exclude")) {
+
+                          $filterResponse = Invoke-MgGraphRequest -Method GET `
+                            -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$($row.Filter)'"
+
+                          if ($filterResponse.value.Count -gt 0) {
+                              $filter = $filterResponse.value[0]
+
+                              $target.assignmentFilterId   = $filter.id
+                              $target.assignmentFilterType = $row.FilterMode
                           }
-                          $target.assignmentFilter = $filterObj
                       }
-                      $assignBody.assignments += $target
+
+                      $assignments += @{
+                          target = $target
+                      }
                   }
               }
 
-              # Exclude groups
+              # EXCLUDE GROUPS
               if ($row.ExcludeGroups) {
                   foreach ($g in $row.ExcludeGroups -split ',') {
-                      $target = @{
-                          "@odata.type" = "#microsoft.graph.exclusionGroupAssignmentTarget"
-                          groupId = $g.Trim()
+                      $assignments += @{
+                          target = @{
+                              "@odata.type" = "#microsoft.graph.exclusionGroupAssignmentTarget"
+                              groupId       = $g.Trim()
+                          }
                       }
-                      $assignBody.assignments += $target
                   }
               }
 
-              if ($assignBody.assignments.Count -gt 0) {
+              if ($assignments.Count -gt 0) {
+
+                  $body = @{
+                      assignments = $assignments
+                  }
+
                   Invoke-MgGraphRequest -Method POST `
                     -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
-                    -Body ($assignBody | ConvertTo-Json -Depth 10)
-                  Write-Host "Policy '$($row.FileName)' assigned successfully"
+                    -Body ($body | ConvertTo-Json -Depth 10)
+
+                  Write-Host "Assignments applied to $($row.FileName)"
               }
           }
+
+          Write-Host "Assignment job complete."
