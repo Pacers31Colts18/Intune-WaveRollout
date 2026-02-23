@@ -22,6 +22,7 @@ jobs:
   import:
     name: Import Policies
     runs-on: ubuntu-latest
+    environment: GraphApi
     outputs:
       policy_ids: ${{ steps.capture_ids.outputs.policy_ids }}
     steps:
