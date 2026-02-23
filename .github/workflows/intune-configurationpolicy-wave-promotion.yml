@@ -147,10 +147,12 @@ jobs:
               # INCLUDE GROUPS
               if ($row.IncludeGroups) {
                   foreach ($g in $row.IncludeGroups -split ',') {
+                        $groupUri = "https://graph.microsoft.com/beta/groups/`?$filter=displayName -eq $($g.Trim())"
+                        $response = Invoke-MgGraphRequest -Method GET -Uri $groupUri
 
                       $target = @{
                           "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                          groupId       = $g.Trim()
+                          groupId       = $response.value.id
                       }
 
                       # FILTER SUPPORT
@@ -175,10 +177,13 @@ jobs:
               # EXCLUDE GROUPS
               if ($row.ExcludeGroups) {
                   foreach ($g in $row.ExcludeGroups -split ',') {
+                        $groupUri = "https://graph.microsoft.com/beta/groups/`?$filter=displayName -eq $($g.Trim())"
+                        $response = Invoke-MgGraphRequest -Method GET -Uri $groupUri
+
                       $assignments += @{
                           target = @{
                               "@odata.type" = "#microsoft.graph.exclusionGroupAssignmentTarget"
-                              groupId       = $g.Trim()
+                              groupId       = $response.value.id
                           }
                       }
                   }
