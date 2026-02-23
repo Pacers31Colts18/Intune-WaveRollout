@@ -18,7 +18,7 @@ jobs:
   # -------------------------
   import:
     runs-on: ubuntu-latest
-    environment: Import
+    environment: GraphApi
     outputs:
       policy_ids: ${{ steps.import_policies.outputs.policy_ids }}
     steps:
@@ -96,7 +96,7 @@ jobs:
   assign:
     needs: import
     runs-on: ubuntu-latest
-    environment: ManualAssignment
+    environment: GraphApi
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
