@@ -10,6 +10,7 @@ permissions:
   pull-requests: write
 
 env:
+  REPO_DIR: ${{ github.workspace }}
   STAGING_FOLDER: "${{ github.workspace }}/staging"
   CSV_PATH: "${{ github.workspace }}/staging/staging.csv"
 
@@ -50,19 +51,18 @@ jobs:
           $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
           Connect-MgGraph -AccessToken $SecureToken
-          Import-Module -Name "${{ github.workspace }}" -Force
-
-          $policyFiles = Get-ChildItem "${{ env.STAGING_FOLDER }}" -File -Filter *.json
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+          $policyFiles = Get-ChildItem "${{ env.REPO_DIR }}/staging" -File -Filter *.json
           $policyMap = @{}
 
           foreach ($file in $policyFiles) {
               Write-Host "Importing policy: $($file.Name)"
-              $policyId = Import-IntuneSettingsCatalogPolicy -folder "${{ env.STAGING_FOLDER }}" -fileName $file.Name
+              $policyId = Import-IntuneSettingsCatalogPolicy -folder "${{ env.REPO_DIR }}/staging" -fileName $file.Name
               $policyMap[$file.Name] = $policyId
           }
 
           # Clear staging folder
-          Remove-Item -Path "${{ env.STAGING_FOLDER }}\*" -Force
+          Remove-Item -Path "${{ env.REPO_DIR }}/staging/" -File -Filter *.json -Force
 
           # Output mapping for downstream jobs
           $allIds = $policyMap.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" } -join ';'
