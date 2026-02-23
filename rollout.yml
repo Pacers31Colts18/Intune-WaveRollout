@@ -1,0 +1,30 @@
+policy: test_joe2.json
+
+waves:
+  - name: Wave1
+    assignments:
+      - group: JoeLoveless-WIN-DD-Wave1
+        type: include
+        filter: WIN - W11 - PROD
+        filtermode: include
+    - group: JoeLoveless-WIN-DD-Wave2
+        type: exclude
+    - group: JoeLoveless-WIN-DD-Wave3
+        type: exclude
+
+  - name: Wave2
+    assignments:
+      - group: JoeLoveless-WIN-DD-Wave2
+        type: include
+
+  - name: Wave3
+    assignments:
+      - group: JoeLoveless-WIN-DD-Wave3
+        type: include
+
+  - name: Prod
+    assignments:
+      - group: All-Devices
+        type: include
+      - group: IT-Exclusions
+        type: exclude
