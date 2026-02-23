@@ -1,7 +1,11 @@
 name: Intune Configuration Policy Lifecycle
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:    # manual trigger
+  pull_request:
+    types: [opened, synchronize, reopened]   # runs on PR creation, updates, or reopen
+    branches:
+      - main
 
 permissions:
   id-token: write
