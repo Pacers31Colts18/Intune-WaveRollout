@@ -36,7 +36,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-            - name: Import policies and capture IDs
+      - name: Import policies and capture IDs
         id: save_ids
         shell: pwsh
         run: |
