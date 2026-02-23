@@ -151,7 +151,7 @@ jobs:
           
                       $groupName = $g.Trim()
           
-                      $groupResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/groups?`$filter=displayName eq '$groupName'"
+                      $groupResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/groups/`?$filter=displayName -eq '$groupName'"
                       $group = $groupResponse.value | Select-Object -First 1
                       if (-not $group) { continue }
           
@@ -162,7 +162,7 @@ jobs:
           
                       if ($row.Filter -and $row.FilterMode) {
           
-                          $filterResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$($row.Filter)'"
+                          $filterResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters/`?$filter=displayName -eq '$($row.Filter)'"
                           $filter = $filterResponse.value | Select-Object -First 1
           
                           if ($filter) {
@@ -182,7 +182,7 @@ jobs:
           
                       $groupName = $g.Trim()
           
-                      $groupResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/groups?`$filter=displayName eq '$groupName'"
+                      $groupResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/groups/`?$filter=displayName -eq '$groupName'"
                       $group = $groupResponse.value | Select-Object -First 1
                       if (-not $group) { continue }
           
