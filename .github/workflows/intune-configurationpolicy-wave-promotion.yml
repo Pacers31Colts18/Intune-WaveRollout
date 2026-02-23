@@ -161,7 +161,7 @@ jobs:
                           if ($filterResponse.value.Count -gt 0) {
                               $filter = $filterResponse.value[0]
 
-                              $target.deviceAndAppManagementsAssignmentFilterId   = $filter.id
+                              $target.deviceAndAppManagementAssignmentFilterId   = $filter.id
                               $target.deviceAndAppManagementAssignmentFilterType = $row.FilterMode
                           }
                       }
