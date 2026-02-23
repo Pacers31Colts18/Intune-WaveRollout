@@ -78,16 +78,13 @@ jobs:
                       -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId" `
                       -Body ($json | ConvertTo-Json -Depth 10)
               } else {
-                  $createdRaw = Invoke-MgGraphRequest -Method POST `
-                      -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
-                      -Body ($json | ConvertTo-Json -Depth 10)
-                  $created = $createdRaw | ConvertFrom-Json
-                  $policyId = $created.id
-              }
-
-              $policyIds[$row.FileName] = $policyId
-              Write-Host "Imported policy '$($json.name)' once with ID $policyId"
-          }
+            $created = Invoke-MgGraphRequest -Method POST -Uri "..." -Body ($json | ConvertTo-Json -Depth 10)
+            $policyId = $created.id
+                          }
+            
+                          $policyIds[$row.FileName] = $policyId
+                          Write-Host "Imported policy '$($json.name)' once with ID $policyId"
+                      }
 
           # Export mapping for assignment step
           $allIds = $policyIds.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" } -join ';'
