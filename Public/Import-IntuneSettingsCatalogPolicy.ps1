@@ -1,4 +1,4 @@
-function Import-IntunesettingsCatalog {
+function Import-IntuneSettingsCatalogPolicy {
 [CmdletBinding()]
 param
 (
