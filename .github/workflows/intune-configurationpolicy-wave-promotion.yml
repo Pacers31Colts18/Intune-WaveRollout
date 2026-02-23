@@ -1,10 +1,8 @@
-name: Intune Configuration Policy Lifecycle
+name: Intune Policy Import & Assignment
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    branches:
-      - main
 
 permissions:
   id-token: write
@@ -12,7 +10,8 @@ permissions:
   pull-requests: write
 
 env:
-  CSV_PATH: "${{ github.workspace }}/staging.csv"
+  STAGING_FOLDER: "${{ github.workspace }}/staging"
+  CSV_PATH: "${{ github.workspace }}/staging/staging.csv"
 
 jobs:
 
@@ -23,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: GraphApi
     outputs:
-      policy_ids: ${{ steps.import_policies.outputs.policy_ids }}
+      imported_policies: ${{ steps.import_policies.outputs.imported_policies }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -43,7 +42,7 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      - name: Import Policies from CSV
+      - name: Import Policies from Staging Folder
         id: import_policies
         shell: pwsh
         run: |
@@ -51,47 +50,26 @@ jobs:
           $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
           Connect-MgGraph -AccessToken $SecureToken
+          Import-Module -Name "${{ github.workspace }}" -Force
 
-          $rows = Import-Csv -Path "${{ env.CSV_PATH }}"
-          $uniquePolicies = $rows | Select-Object -Property FileName -Unique
+          $policyFiles = Get-ChildItem "${{ env.STAGING_FOLDER }}" -File -Filter *.json
+          $policyMap = @{}
 
-          $policyIds = @{}
+          foreach ($file in $policyFiles) {
+              Write-Host "Importing policy: $($file.Name)"
+              $policyId = Import-IntuneSettingsCatalogPolicy -folder "${{ env.STAGING_FOLDER }}" -fileName $file.Name
+              $policyMap[$file.Name] = $policyId
+          }
 
-          foreach ($row in $uniquePolicies) {
-              $jsonPath = "${{ github.workspace }}/policies/$($row.FileName)"
-              if (-not (Test-Path $jsonPath)) { continue }
+          # Clear staging folder
+          Remove-Item -Path "${{ env.STAGING_FOLDER }}\*" -Force
 
-              $json = Get-Content $jsonPath -Raw | ConvertFrom-Json
-
-              # Remove readonly/extraneous properties
-              foreach ($prop in @('id','createdDateTime','lastModifiedDateTime','version','supportedScopeTags')) {
-                  $json.PSObject.Properties.Remove($prop)
-              }
-
-              # Check if the policy already exists by name
-              $existingRaw = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$($json.name)'"
-              try { $existing = $existingRaw | ConvertFrom-Json } catch { $existing = @{value=@()} }
-
-              if ($existing.value.Count -gt 0) {
-                  $policyId = $existing.value[0].id
-                  Invoke-MgGraphRequest -Method PATCH `
-                      -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId" `
-                      -Body ($json | ConvertTo-Json -Depth 10)
-              } else {
-            $created = Invoke-MgGraphRequest -Method POST -Uri "..." -Body ($json | ConvertTo-Json -Depth 10)
-            $policyId = $created.id
-                          }
-            
-                          $policyIds[$row.FileName] = $policyId
-                          Write-Host "Imported policy '$($json.name)' once with ID $policyId"
-                      }
-
-          # Export mapping for assignment step
-          $allIds = $policyIds.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" } -join ';'
-          echo "policy_ids=$allIds" >> $GITHUB_OUTPUT
+          # Output mapping for downstream jobs
+          $allIds = $policyMap.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" } -join ';'
+          echo "imported_policies=$allIds" >> $GITHUB_OUTPUT
 
   # -------------------------
-  # Assign Policies (Manual Step)
+  # Assign Policies
   # -------------------------
   assign:
     needs: import
@@ -122,8 +100,8 @@ jobs:
           $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
           Connect-MgGraph -AccessToken $SecureToken
 
-          # Parse imported policy IDs
-          $policyIdsOutput = "${{ needs.import.outputs.policy_ids }}"
+          # Parse imported policies
+          $policyIdsOutput = "${{ needs.import.outputs.imported_policies }}"
           $policyMap = @{}
           foreach ($kv in $policyIdsOutput -split ';') {
               $parts = $kv -split '='
@@ -148,15 +126,12 @@ jobs:
                           groupId = $g.Trim()
                       }
                       if ($row.FilterMode -eq "Include" -and $row.Filter) {
-                          $filterResp = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$($row.Filter)'"
-                          $filterJson = $filterResp | ConvertFrom-Json
-                          if ($filterJson.value.Count -gt 0) {
-                              $target.assignmentFilter = @{
-                                  "@odata.type" = "#microsoft.graph.deviceAndAppManagementAssignmentFilter"
-                                  id = $filterJson.value[0].id
-                                  assignmentFilterType = $filterJson.value[0].assignmentFilterType
-                              }
+                          $filterObj = @{
+                              "@odata.type" = "#microsoft.graph.deviceAndAppManagementAssignmentFilter"
+                              id = (Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$($row.Filter)'").value[0].id
+                              assignmentFilterType = (Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$($row.Filter)'").value[0].assignmentFilterType
                           }
+                          $target.assignmentFilter = $filterObj
                       }
                       $assignBody.assignments += $target
                   }
@@ -175,8 +150,8 @@ jobs:
 
               if ($assignBody.assignments.Count -gt 0) {
                   Invoke-MgGraphRequest -Method POST `
-                      -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
-                      -Body ($assignBody | ConvertTo-Json -Depth 10)
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
+                    -Body ($assignBody | ConvertTo-Json -Depth 10)
                   Write-Host "Policy '$($row.FileName)' assigned successfully"
               }
           }
