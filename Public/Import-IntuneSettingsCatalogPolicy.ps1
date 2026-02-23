@@ -1,3 +1,4 @@
+function Import-IntunesettingsCatalog {
 [CmdletBinding()]
 param
 (
@@ -24,4 +25,5 @@ Foreach ($policyfile in $policyfiles){
             Write-Host "$policybaseName does not exist, creating new profile"
             $post = Invoke-Mggraphrequest -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" -Method POST -Body $policy -ContentType "application/json"
     }
+}
 }
