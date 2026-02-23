@@ -2,10 +2,10 @@ name: Intune Configuration Policy Lifecycle
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened] # Trigger import on PR creation or update
-  workflow_dispatch: # Manual trigger for assignments
+    types: [opened, synchronize, reopened]  # Trigger import on PR creation or update
+  workflow_dispatch:                        # Manual trigger for assignments
   schedule:
-    - cron: '0 3 * * *' # Optional: cron trigger (UTC)
+    - cron: '0 3 * * *'                     # Optional: cron trigger (UTC)
 
 permissions:
   id-token: write
@@ -37,13 +37,14 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Import policies from PR
+      - name: Import policies
         shell: pwsh
         run: |
           $stagingPath = "${{ github.workspace }}/staging.csv"
           if (-not (Test-Path $stagingPath)) { Write-Host "No staging.csv found"; exit 0 }
 
           $staging = Import-Csv $stagingPath
+          $uniquePolicies = $staging.FileName | Sort-Object -Unique
 
           # Azure Graph login
           $tokenResp = az account get-access-token --resource https://graph.microsoft.com
@@ -53,9 +54,9 @@ jobs:
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
           Connect-MgGraph -AccessToken $secureToken
 
-          foreach ($deploy in $staging) {
-              $jsonPath = "${{ github.workspace }}/policies/$($deploy.FileName)"
-              if (-not (Test-Path $jsonPath)) { Write-Host "Skipping $($deploy.FileName)"; continue }
+          foreach ($file in $uniquePolicies) {
+              $jsonPath = "${{ github.workspace }}/policies/$file"
+              if (-not (Test-Path $jsonPath)) { Write-Host "Skipping $file"; continue }
 
               $json = Get-Content $jsonPath -Raw | ConvertFrom-Json
               $policyName = $json.name
@@ -71,7 +72,7 @@ jobs:
                   $policyId = $created.id
               }
 
-              Write-Host "Policy '$policyName' imported successfully. No assignments applied."
+              Write-Host "Policy '$policyName' imported successfully (no assignments applied)."
           }
 
   # -------------------------
@@ -114,29 +115,23 @@ jobs:
               $jsonPath = "${{ github.workspace }}/policies/$($deploy.FileName)"
               if (-not (Test-Path $jsonPath)) { Write-Host "Skipping $($deploy.FileName)"; continue }
 
-              $json = Get-Content $jsonPath -Raw | ConvertFrom-Json
-              $policyName = $json.name
+              $policyName = (Get-Content $jsonPath -Raw | ConvertFrom-Json).name
 
-              # Get policy
+              # Get policy from Graph
               $existing = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
-              if ($existing.value.Count -eq 0) {
-                  Write-Host "Policy '$policyName' must be imported first!"
-                  continue
-              }
+              if ($existing.value.Count -eq 0) { Write-Host "Policy '$policyName' must be imported first"; continue }
+
               $policyId = $existing.value[0].id
 
               # Lookup Filter ID if provided
               $filterId = $null
               if ($deploy.Filter) {
                   $filterResp = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$($deploy.Filter)'"
-                  if ($filterResp.value.Count -gt 0) {
-                      $filterId = $filterResp.value[0].id
-                  } else {
-                      Write-Host "Filter '$($deploy.Filter)' not found. Skipping filter for '$policyName'"
-                  }
+                  if ($filterResp.value.Count -gt 0) { $filterId = $filterResp.value[0].id }
+                  else { Write-Host "Filter '$($deploy.Filter)' not found, skipping filter for '$policyName'" }
               }
 
-              # Handle IncludeGroups
+              # Determine include groups
               $includeGroups = @()
               if ($deploy.IncludeGroups) {
                   $newGroups = $deploy.IncludeGroups -split ','
@@ -148,14 +143,14 @@ jobs:
                       }
                       $includeGroups = $newGroups
                   } else {
-                      # Accumulate
+                      # Accumulate previous include groups
                       $existingAssign = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments"
                       $existingGroups = $existingAssign.value | ForEach-Object { $_.target.groupId }
                       $includeGroups = $existingGroups + $newGroups
                   }
               }
 
-              # Apply IncludeGroups
+              # Apply include groups
               foreach ($g in $includeGroups) {
                   $assignment = @{
                       target = @{
@@ -163,19 +158,15 @@ jobs:
                           groupId = $g
                       }
                   }
-                  if ($filterId -and $deploy.FilterMode -eq "Include") {
+                  if ($filterId) {
                       $assignment["deviceAndAppManagementAssignmentFilterId"] = $filterId
-                      $assignment["deviceAndAppManagementAssignmentFilterType"] = "include"
-                  } elseif ($filterId -and $deploy.FilterMode -eq "Exclude") {
-                      $assignment["deviceAndAppManagementAssignmentFilterId"] = $filterId
-                      $assignment["deviceAndAppManagementAssignmentFilterType"] = "exclude"
+                      $assignment["deviceAndAppManagementAssignmentFilterType"] = $deploy.FilterMode
                   }
-
                   $body = @{ assignments = @($assignment) }
                   Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" -Body ($body | ConvertTo-Json -Depth 10)
               }
 
-              # Apply ExcludeGroups
+              # Apply exclude groups (filters cannot apply)
               if ($deploy.ExcludeGroups) {
                   $excludeGroups = $deploy.ExcludeGroups -split ','
                   foreach ($g in $excludeGroups) {
@@ -191,5 +182,5 @@ jobs:
                   }
               }
 
-              Write-Host "Policy '$policyName' assigned. IncludeGroups: $($includeGroups -join ',') ExcludeGroups: $($deploy.ExcludeGroups) Filter: $($deploy.Filter) Mode: $($deploy.FilterMode)"
+              Write-Host "Policy '$policyName' assigned. Include: $($includeGroups -join ',') Exclude: $($deploy.ExcludeGroups) Filter: $($deploy.Filter) Mode: $($deploy.FilterMode)"
           }
