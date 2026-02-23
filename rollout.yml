@@ -1,0 +1,24 @@
+policy: test_joe2.json
+currentWave: Wave1
+
+waves:
+  - name: Wave1
+    assignments:
+      - group: JoeLoveless-WIN-DD-Wave1
+        type: include
+        filter: WIN - W11 - PROD
+        filterMode: include
+
+  - name: Wave2
+    assignments:
+      - group: JoeLoveless-WIN-DD-Wave2
+        type: include
+        filter: Windows-11-Only
+        filterMode: include
+
+  - name: Wave3
+    assignments:
+      - group: JoeLoveless-WIN-DD-Wave3
+        type: include
+        filter: Windows-11-Only
+        filterMode: include
