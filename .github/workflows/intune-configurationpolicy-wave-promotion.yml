@@ -72,10 +72,17 @@ jobs:
                   $json = @{ name = $policyName; "@odata.type"="#microsoft.graph.deviceConfiguration" }
               }
 
-              # Check if exists
-              $existingRaw = Invoke-MgGraphRequest -Method GET `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/`?$filter=name eq '$policyName'"
-              $existing = $existingRaw | ConvertFrom-Json
+             # GET existing policy
+            $existingRaw = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
+
+              # Convert safely to JSON
+              try {
+                  $existing = $existingRaw | ConvertFrom-Json
+              } catch {
+                  Write-Host "Warning: Failed to parse existing policy response. Raw output:"
+                  Write-Host $existingRaw
+                  $existing = @{ value = @() } # treat as empty
+              }
 
               if ($existing.value.Count -gt 0) {
                   $policyId = $existing.value[0].id
