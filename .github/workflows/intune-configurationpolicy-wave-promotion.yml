@@ -71,12 +71,12 @@ jobs:
           $policyMap = @{}
 
           foreach ($policy in $results) {
-              Write-Host "Imported/Updated: $($policy.Name) - $($policy.Id)"
               $policyMap[$policy.Name] = $policy.Id
           }
-
-          $output = $policyMap.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" } -join ';'
-          echo "imported_policies=$output" >> $env:GITHUB_OUTPUT
+          
+          $allIds = ($policyMap.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ';'
+          
+          echo "imported_policies=$allIds" >> $env:GITHUB_OUTPUT
 
           Write-Host "Import job complete."
   
