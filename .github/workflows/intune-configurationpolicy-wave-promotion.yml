@@ -1,35 +1,22 @@
-name: Intune Policy Rollout
+name: Intune Wave Deployment
 
 on:
-  pull_request:
-    types: [opened, synchronize]
-    branches:
-      - main
-  workflow_dispatch:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 * * * *"  # every hour to check rollout.yml
 
 permissions:
   id-token: write
-  contents: write
+  contents: read
   pull-requests: write
-
-env:
-  REPO_DIR: ${{ github.workspace }}
 
 jobs:
 
-  # -------------------------
-  # Import Job
-  # -------------------------
-  import-policy:
-    if: github.event_name == 'pull_request'
+  import-policies:
     runs-on: ubuntu-latest
     environment: Import
     steps:
-      - name: Checkout PR Branch
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+      - uses: actions/checkout@v4
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -37,79 +24,30 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Import Policies
+      - name: Install YAML Module
         shell: pwsh
         run: |
-          # GitHub Actions already checks out PR branch
-          # Make sure origin/main exists
-          git fetch origin main
+          Install-Module powershell-yaml -Force -AllowClobber
+          Import-Module powershell-yaml
 
-          $changedFiles = git diff --name-only origin/main HEAD |
-                          Where-Object { $_ -like "policies/*.json" }
+      - name: Import policies from PR
+        shell: pwsh
+        run: |
+          $rolloutPath = "${{ github.workspace }}/rollout.yml"
+          $rollout = Get-Content $rolloutPath -Raw | ConvertFrom-Yaml
 
-          if (-not $changedFiles) {
-              Write-Host "No policy changes detected."
-              exit 0
+          foreach ($policy in $rollout.policies) {
+              $jsonPath = "${{ github.workspace }}/policies/$($policy.file)"
+              $json = Get-Content $jsonPath -Raw | ConvertFrom-Json
+              # Import logic here (PATCH or POST) ...
           }
 
-          Write-Host "Changed policy files:"
-          $changedFiles | ForEach-Object { Write-Host $_ }
-
-          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
-          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
-
-          $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
-          $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
-          $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
-          Connect-MgGraph -AccessToken $SecureToken
-
-          foreach ($file in $changedFiles) {
-              $json = Get-Content $file -Raw | ConvertFrom-Json
-              $policyName = $json.name
-
-              $existing = Invoke-MgGraphRequest `
-                -Method GET `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$policyName'"
-
-              if ($existing.value.Count -gt 0) {
-                  $policyId = $existing.value[0].id
-                  Invoke-MgGraphRequest `
-                    -Method PATCH `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId" `
-                    -Body ($json | ConvertTo-Json -Depth 100)
-              }
-              else {
-                  $created = Invoke-MgGraphRequest `
-                    -Method POST `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
-                    -Body ($json | ConvertTo-Json -Depth 100)
-                  $policyId = $created.id
-              }
-
-              # Remove all assignments for a clean import
-              $assignments = Invoke-MgGraphRequest `
-                -Method GET `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments"
-              foreach ($a in $assignments.value) {
-                  Invoke-MgGraphRequest `
-                    -Method DELETE `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments/$($a.id)"
-              }
-
-              Write-Host "Policy '$policyName' imported successfully with no assignments."
-          }
-
-  # -------------------------
-  # Wave Deployment (Step-by-Step)
-  # -------------------------
   deploy-wave:
+    needs: import-policies
     runs-on: ubuntu-latest
     environment: GraphApi
     steps:
-      - name: Checkout PR Branch
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
       - name: Azure Login
         uses: azure/login@v2
@@ -118,134 +56,33 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Deploy Current Wave
+      - name: Install YAML Module
         shell: pwsh
         run: |
-          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
-          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
+          Install-Module powershell-yaml -Force -AllowClobber
+          Import-Module powershell-yaml
 
-          $GraphTokenResponse = az account get-access-token --resource https://graph.microsoft.com
-          $GraphToken = ($GraphTokenResponse | ConvertFrom-Json).accessToken
-          $SecureToken = ConvertTo-SecureString $GraphToken -AsPlainText -Force
-          Connect-MgGraph -AccessToken $SecureToken
-
-          # Load rollout definition
+      - name: Deploy eligible waves
+        shell: pwsh
+        run: |
           $rolloutPath = "${{ github.workspace }}/rollout.yml"
-          if (-not (Test-Path $rolloutPath)) { throw "rollout.yml not found in PR branch" }
-
           $rollout = Get-Content $rolloutPath -Raw | ConvertFrom-Yaml
-          $policyFile = "policies/$($rollout.policy)"
-          if (-not (Test-Path $policyFile)) { throw "Policy JSON not found: $policyFile" }
+          $now = Get-Date -AsUTC
 
-          $policyJson = Get-Content $policyFile -Raw | ConvertFrom-Json
+          foreach ($policy in $rollout.policies) {
+              $deployTime = [datetime]::Parse($policy.deployTime)
+              if ($deployTime -le $now) {
+                  Write-Host "Deploying $($policy.file) to $($policy.wave)"
 
-          $currentWaveName = $rollout.currentWave
-          $wave = $rollout.waves | Where-Object { $_.name -eq $currentWaveName }
-          if (-not $wave) { throw "Wave '$currentWaveName' not found in rollout.yml" }
+                  # Load policy JSON
+                  $jsonPath = "${{ github.workspace }}/policies/$($policy.file)"
+                  $json = Get-Content $jsonPath -Raw | ConvertFrom-Json
 
-          $existing = Invoke-MgGraphRequest `
-            -Method GET `
-            -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$($policyJson.name)'"
-
-          if ($existing.value.Count -eq 0) { throw "Policy must be imported first!" }
-          $policyId = $existing.value[0].id
-
-          # Get existing assignments
-          $currentAssignments = Invoke-MgGraphRequest `
-            -Method GET `
-            -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assignments"
-
-          foreach ($assignment in $wave.assignments) {
-              $groupName = $assignment.group
-              $groupType = $assignment.type
-              $filterName = $assignment.filter
-              $filterMode = $assignment.filterMode
-
-              # Resolve Group ID
-              $group = Invoke-MgGraphRequest -Method GET `
-                -Uri "https://graph.microsoft.com/v1.0/groups?`$filter=displayName eq '$groupName'"
-              if ($group.value.Count -eq 0) { throw "Group '$groupName' not found" }
-              $groupId = $group.value[0].id
-
-              # Resolve filter ID if filter specified
-              if ($filterName) {
-                  $f = Invoke-MgGraphRequest -Method GET `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters?`$filter=displayName eq '$filterName'"
-                  if ($f.value.Count -eq 0) { throw "Filter '$filterName' not found" }
-                  $filterId = $f.value[0].id
-                  $filterType = $filterMode
+                  # Determine assignment targets
+                  # Accumulate previous assignments except for All Users/All Devices
+                  # Apply include/exclude groups as per YAML
+                  # Call Microsoft Graph PATCH/POST as needed
+              } else {
+                  Write-Host "Skipping $($policy.file) (scheduled for $deployTime)"
               }
-
-              # Determine assignment body
-              if ($groupName -in @("All-Devices","All Users")) {
-                  # Replace include assignments, keep excludes
-                  $existingExcludes = $currentAssignments.value | Where-Object { $_.'@odata.type' -like "*exclusion*" }
-                  foreach ($e in $existingExcludes) { $exclusions += $e }
-                  $assignmentBody = @{
-                    assignments = @()
-                  }
-                  foreach ($e in $existingExcludes) { $assignmentBody.assignments += $e }
-                  $newTarget = @{
-                    "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                    groupId = $groupId
-                  }
-                  if ($filterId) { $newTarget.deviceAndAppManagementAssignmentFilterId = $filterId; $newTarget.deviceAndAppManagementAssignmentFilterType = $filterType }
-                  $assignmentBody.assignments += $newTarget
-              }
-              else {
-                  # Accumulate includes, keep excludes
-                  $assignmentBody = @{
-                    assignments = @($currentAssignments.value)
-                  }
-                  $newTarget = if ($groupType -eq "include") { 
-                    @{
-                      "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                      groupId = $groupId
-                    }
-                  } else {
-                    @{
-                      "@odata.type" = "#microsoft.graph.exclusionGroupAssignmentTarget"
-                      groupId = $groupId
-                    }
-                  }
-                  if ($filterId) { $newTarget.deviceAndAppManagementAssignmentFilterId = $filterId; $newTarget.deviceAndAppManagementAssignmentFilterType = $filterType }
-                  # Only add if not already assigned
-                  if (-not ($assignmentBody.assignments | Where-Object { $_.groupId -eq $groupId })) {
-                      $assignmentBody.assignments += $newTarget
-                  }
-              }
-
-              # Apply assignments
-              Invoke-MgGraphRequest `
-                -Method POST `
-                -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$policyId/assign" `
-                -Body ($assignmentBody | ConvertTo-Json -Depth 20)
-              Write-Host "Applied assignment for group '$groupName' in wave '$currentWaveName'"
           }
-
-          # Update currentWave to next wave
-          $waveIndex = [array]::IndexOf($rollout.waves.name, $currentWaveName)
-          if ($waveIndex -lt ($rollout.waves.Count - 1)) {
-              $rollout.currentWave = $rollout.waves[$waveIndex + 1].name
-          } else {
-              $rollout.currentWave = "Completed"
-          }
-
-          # Write rollout.yml back
-          $rollout | ConvertTo-Yaml | Set-Content $rolloutPath -Force
-
-          # Commit updated rollout.yml back to PR branch
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add $rolloutPath
-          git commit -m "Advance rollout wave to $($rollout.currentWave)" -m "Automated wave progression"
-          git push origin HEAD
-
-          Write-Host "Wave '$currentWaveName' deployed. Next wave: $($rollout.currentWave)"
-
-      - name: Auto-Merge if Prod Completed
-        if: ${{ steps.deploy-wave.outputs.currentWave == 'Completed' }}
-        uses: peter-evans/enable-pull-request-automerge@v3
-        with:
-          pull-request-number: ${{ github.event.pull_request.number }}
-          merge-method: squash
