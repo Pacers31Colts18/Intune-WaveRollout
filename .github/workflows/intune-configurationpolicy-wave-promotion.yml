@@ -150,8 +150,9 @@ jobs:
                   foreach ($g in $row.IncludeGroups -split ',') {
           
                       $groupName = $g.Trim()
-          
-                      $groupResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/groups/`?$filter=displayName -eq '$groupName'"
+
+                      $uri = "https://graph.microsoft.com/beta/groups?`$filter=displayName eq '$groupName'"
+                      $groupresponse = Invoke-MgGraphRequest -Method GET -Uri $uri
                       $group = $groupResponse.value | Select-Object -First 1
                       if (-not $group) { continue }
           
@@ -181,8 +182,8 @@ jobs:
                   foreach ($g in $row.ExcludeGroups -split ',') {
           
                       $groupName = $g.Trim()
-          
-                      $groupResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/groups/`?$filter=displayName -eq '$groupName'"
+                      $uri = "https://graph.microsoft.com/beta/groups?`$filter=displayName eq '$groupName'"
+                      $groupresponse = Invoke-MgGraphRequest -Method GET -Uri $uri
                       $group = $groupResponse.value | Select-Object -First 1
                       if (-not $group) { continue }
           
