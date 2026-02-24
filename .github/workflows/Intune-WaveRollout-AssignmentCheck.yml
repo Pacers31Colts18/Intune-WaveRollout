@@ -11,6 +11,9 @@ permissions:
   contents: read
   statuses: write
 
+env:
+  REPO_DIR: ${{ github.workspace }}
+
 jobs:
   gate:
     runs-on: ubuntu-latest
@@ -18,28 +21,61 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Find PR created by JL-IntuneDocs workflow
+      - name: Download policy artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: intune-assignments
+          path: ./artifacts
+
+      - name: Install Graph Modules
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
+
+      - name: Connect to Graph
+        shell: pwsh
+        run: |
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
+
+      - name: Capture Assignments
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+
+          $jsonFiles = Get-ChildItem -Path ./artifacts -Filter *.json
+          foreach ($file in $jsonFiles) {
+              $policies = Get-Content $file.FullName | ConvertFrom-Json
+              foreach ($policy in $policies) {
+                  Write-Host "Capturing assignments for $($policy.Name) ($($policy.Id))"
+                  $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policy.Id
+                  $outFile = "./artifacts/$($policy.Name)-current-assignments.json"
+                  $current | Out-File -FilePath $outFile -Encoding utf8
+              }
+          }
+
+      - name: Upload captured assignments
+        uses: actions/upload-artifact@v6
+        with:
+          name: intune-current-assignments
+          path: ./artifacts/*.json
+
+      - name: Find PR
         id: find_pr
         run: |
-          echo "Searching for PR with branch prefix: JL-IntuneWaveRollout-"
-
           PR=$(gh pr list --state open --json number,headRefName \
-               --jq '.[] | select(.headRefName | startswith("JL-IntuneDocs-")) | .number')
-
-          echo "PR: $PR"
+               --jq '.[] | select(.headRefName | startswith("JL-IntuneWaveRollout-")) | .number')
           echo "pr_number=$PR" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get PR commit SHA
+      - name: Get PR SHA
         id: get_sha
         if: ${{ steps.find_pr.outputs.pr_number != '' }}
         run: |
-          PR=${{ steps.find_pr.outputs.pr_number }}
-
-          SHA=$(gh pr view "$PR" --json headRefOid --jq '.headRefOid')
-          echo "PR commit SHA: $SHA"
-
+          SHA=$(gh pr view ${{ steps.find_pr.outputs.pr_number }} --json headRefOid --jq '.headRefOid')
           echo "sha=$SHA" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -48,12 +84,9 @@ jobs:
         if: ${{ steps.get_sha.outputs.sha != '' }}
         run: |
           SHA="${{ steps.get_sha.outputs.sha }}"
-          echo "Setting status on PR commit: $SHA"
-
-          gh api \
-            repos/${{ github.repository }}/statuses/$SHA \
+          gh api repos/${{ github.repository }}/statuses/$SHA \
             -f state=success \
-            -f context="Status-Gate" \
-            -f description="All required jobs completed successfully."
+            -f context="Intune-Assignment-Gate" \
+            -f description="Assignments captured successfully."
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
