@@ -57,7 +57,7 @@ jobs:
       # Download previous workflow artifacts
       # -----------------------
       - name: Download imported policies
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v6
         with:
           name: intune-assignments
           path: ./artifacts/imported
