@@ -21,50 +21,94 @@ jobs:
     environment: GraphApi
 
     steps:
+      # -----------------------
+      # Checkout Repo
+      # -----------------------
       - uses: actions/checkout@v4
 
+      # -----------------------
+      # Azure Login
+      # -----------------------
       - uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
+      # -----------------------
+      # Install Graph Modules
+      # -----------------------
       - name: Install Graph Modules
         shell: pwsh
         run: |
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      - name: Connect to Graph
+      # -----------------------
+      # Connect to Graph
+      # -----------------------
+      - name: Connect to Microsoft Graph
         shell: pwsh
         run: |
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
 
-      - name: Capture Assignments
+      # -----------------------
+      # Download previous workflow artifacts
+      # -----------------------
+      - name: Download imported policies
+        uses: actions/download-artifact@v3
+        with:
+          name: intune-assignments
+          path: ./artifacts/imported
+
+      # -----------------------
+      # Capture Current Assignments
+      # -----------------------
+      - name: Capture Current Assignments
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
+          # Load module with Get-IntuneDeviceConfigurationPolicyAssignments function
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-          $jsonFiles = Get-ChildItem -Path "${{ env.REPO_DIR }}/staging" -Filter *.json
+          # Ensure output folder exists
+          $outFolder = "./artifacts/current"
+          if (-not (Test-Path $outFolder)) { New-Item -ItemType Directory -Path $outFolder | Out-Null }
+
+          # Iterate over downloaded JSON files
+          $jsonFiles = Get-ChildItem -Path "./artifacts/imported" -Filter *.json
+          if (-not $jsonFiles) {
+              Write-Warning "No imported policy JSON files found."
+          }
+
           foreach ($file in $jsonFiles) {
+              Write-Host "Processing file: $($file.FullName)"
               $policies = Get-Content $file.FullName | ConvertFrom-Json
-              Write-Host "$file.FullName"
+
               foreach ($policy in $policies) {
                   Write-Host "Capturing assignments for $($policy.Name) ($($policy.Id))"
                   $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policy.Id
-                  $outFile = "${{ env.REPO_DIR }}/artifacts/$($policy.Name)-current-assignments.json"
+
+                  $outFile = "$outFolder/$($policy.Name)-current-assignments.json"
                   $current | Out-File -FilePath $outFile -Encoding utf8
+                  Write-Host "Saved current assignments: $outFile"
               }
           }
 
+      # -----------------------
+      # Upload captured assignments
+      # -----------------------
       - name: Upload captured assignments
         uses: actions/upload-artifact@v6
         with:
           name: intune-current-assignments
-          path: ./artifacts/*.json
+          path: ./artifacts/current/*.json
 
+      # -----------------------
+      # Find PR created by rollout workflow
+      # -----------------------
       - name: Find PR
         id: find_pr
         run: |
@@ -74,6 +118,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # -----------------------
+      # Get PR SHA
+      # -----------------------
       - name: Get PR SHA
         id: get_sha
         if: ${{ steps.find_pr.outputs.pr_number != '' }}
@@ -83,6 +130,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # -----------------------
+      # Set status check on PR commit
+      # -----------------------
       - name: Set status check on PR commit
         if: ${{ steps.get_sha.outputs.sha != '' }}
         run: |
