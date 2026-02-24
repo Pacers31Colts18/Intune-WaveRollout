@@ -119,5 +119,9 @@ jobs:
 
               Write-Host "Assignments saved: $outFile"
           }
-
           Write-Host "Assignment capture complete."
+      - name: Upload captured assignments
+        uses: actions/upload-artifact@v6
+        with:
+          name: intune-assignments
+          path: ${{ env.STAGING_FOLDER }}/*.json
