@@ -2,8 +2,8 @@ name: Intune Import and Capture Assignments
 
 on:
   pull_request:
-    types: [labeled]
-
+    types: [opened, synchronize, reopened]
+    
 permissions:
   id-token: write
   contents: read
