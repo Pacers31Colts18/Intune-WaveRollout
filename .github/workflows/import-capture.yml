@@ -1,4 +1,4 @@
-name: Intune Policy Pipeline
+name: Intune Import and Capture Assignments
 
 on:
   pull_request:
