@@ -16,9 +16,7 @@ env:
 
 jobs:
 
-  # =============================
-  # IMPORT POLICIES (RUNS ON PR)
-  # =============================
+  #Import Policies
   import:
     runs-on: ubuntu-latest
     environment: GraphApi
@@ -56,11 +54,10 @@ jobs:
           $secureToken = ConvertTo-SecureString $token -AsPlainText -Force
           Connect-MgGraph -AccessToken $secureToken
 
-          # Load function
-          . "${{ env.REPO_DIR }}/Public/Import-IntuneSettingsCatalogPolicy.ps1"
-
+          # Load module
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
           Write-Host "Running import on folder: ${{ env.STAGING_FOLDER }}"
-
+          
           # CALL FUNCTION ONCE
           $results = Import-IntuneSettingsCatalogPolicy -folderPath "${{ env.STAGING_FOLDER }}"
 
