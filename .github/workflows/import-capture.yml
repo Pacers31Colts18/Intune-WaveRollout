@@ -80,5 +80,5 @@ jobs:
 
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-          $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId
+          $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $id
           return $current
