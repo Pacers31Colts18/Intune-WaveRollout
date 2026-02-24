@@ -1,4 +1,4 @@
-name: Intune_Assignment-Check
+name: GitHubAction-JL-Intune-AssignmentCheck
 
 on:
   workflow_run:
