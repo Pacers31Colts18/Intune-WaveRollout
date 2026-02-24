@@ -47,13 +47,13 @@ jobs:
           $ErrorActionPreference = "Stop"
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-          $jsonFiles = Get-ChildItem -Path ./artifacts -Filter *.json
+          $jsonFiles = Get-ChildItem -Path "${{ env.REPO_DIR }}/staging" -Filter *.json
           foreach ($file in $jsonFiles) {
               $policies = Get-Content $file.FullName | ConvertFrom-Json
               foreach ($policy in $policies) {
                   Write-Host "Capturing assignments for $($policy.Name) ($($policy.Id))"
                   $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policy.Id
-                  $outFile = "./artifacts/$($policy.Name)-current-assignments.json"
+                  $outFile = "${{ env.REPO_DIR }}/artifacts/$($policy.Name)-current-assignments.json"
                   $current | Out-File -FilePath $outFile -Encoding utf8
               }
           }
