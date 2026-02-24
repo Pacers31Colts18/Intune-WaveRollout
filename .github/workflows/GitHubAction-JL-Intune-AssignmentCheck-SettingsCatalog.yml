@@ -1,8 +1,8 @@
-name: GitHubAction-JL-Intune-AssignmentCheck
+name: GitHubAction-JL-Intune-AssignmentCheck-SettingsCatalog
 
 on:
   workflow_run:
-    workflows: ["GitHubAction-JL-Intune-WaveRollout"]
+    workflows: ["GitHubAction-JL-Intune-Import-SettingsCatalog"]
     types:
       - completed
 
