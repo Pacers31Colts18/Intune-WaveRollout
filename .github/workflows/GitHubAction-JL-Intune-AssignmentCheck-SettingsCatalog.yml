@@ -10,6 +10,7 @@ permissions:
   pull-requests: write
   contents: read
   statuses: write
+  id-token: write
 
 env:
   REPO_DIR: ${{ github.workspace }}
