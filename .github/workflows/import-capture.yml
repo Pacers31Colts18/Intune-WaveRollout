@@ -1,4 +1,4 @@
-name: Intune Policy Import & Capture Assignments
+name: Intune_Import-DeviceConfigurationPolicy
 
 on:
   pull_request:
@@ -16,9 +16,7 @@ env:
 
 jobs:
 
-  # =============================
   # IMPORT POLICIES
-  # =============================
   import:
     runs-on: ubuntu-latest
     environment: GraphApi
@@ -67,61 +65,4 @@ jobs:
 
           Write-Host "Import complete."
 
-  # =============================
-  # CAPTURE ASSIGNMENTS
-  # =============================
-  capture:
-    needs: import
-    if: needs.import.result == 'success'
-    runs-on: ubuntu-latest
-    environment: GraphApi
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          allow-no-subscriptions: true
-
-      - name: Install Graph Modules
-        shell: pwsh
-        run: |
-          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
-          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
-
-      - name: Capture Current Assignments
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          # Connect to Graph
-          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
-          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
-
-          Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
-          # Retrieve imported policies from previous job
-          $raw = '${{ needs.import.outputs.policies }}'
-          if (-not $raw) { throw "No policies passed from import job." }
-
-          $policies = $raw | ConvertFrom-Json
-
-          foreach ($policy in $policies) {
-              Write-Host "Capturing assignments for $($policy.Name) ($($policy.Id))"
-
-              $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policy.Id
-
-              # Save JSON to staging folder
-              $outFile = "${{ env.STAGING_FOLDER }}/$($policy.Name)-assignments.json"
-              $current | Out-File -FilePath $outFile -Encoding utf8
-
-              Write-Host "Assignments saved: $outFile"
-          }
-          Write-Host "Assignment capture complete."
-      - name: Upload captured assignments
-        uses: actions/upload-artifact@v6
-        with:
-          name: intune-assignments
-          path: ${{ env.STAGING_FOLDER }}/*.json
+  
