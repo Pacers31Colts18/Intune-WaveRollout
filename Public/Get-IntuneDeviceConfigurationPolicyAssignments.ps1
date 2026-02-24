@@ -1,7 +1,7 @@
 function Get-IntuneDeviceConfigurationPolicyAssignments {
     Param(
         [Parameter(Mandatory = $false)]
-        [string]$PolicyName
+        [string]$policyId
     )
 
     # Microsoft Graph Connection check
@@ -21,19 +21,13 @@ function Get-IntuneDeviceConfigurationPolicyAssignments {
     #endregion
 
     #region Get Policy
-    $uri = "https://graph.microsoft.com/$graphApiVersion/deviceManagement/configurationPolicies?`$filter=Name eq '$policyName'"
-    do {
-        $response = Invoke-MgGraphRequest -Uri $uri -Method GET
-        $resultCheck += $response
-                
-        $uri = $response.'@odata.nextLink'
-    } while ($uri)
-    $response = $resultCheck.value
+    $uri = "https://graph.microsoft.com/$graphApiVersion/deviceManagement/configurationPolicies/$policyId"
+    $policyResponse = Invoke-MgGraphRequest -Uri $uri -Method GET
 
-    if ($response) {
+    if ($policyResponse) {
         Write-Output "Policy found..."
-        Write-Output "PolicyName: $($response.Name)"
-        Write-Output "PolicyId: $($response.id)"
+        Write-Output "PolicyName: $($policyResponse.Name)"
+        Write-Output "PolicyId: $($policyResponse.id)"
     }
     else {
         Write-Error "No Settings Catalog policy found: $policyName"
@@ -43,13 +37,13 @@ function Get-IntuneDeviceConfigurationPolicyAssignments {
 
     #region Get Current Assignments
         try {
-            $uri = "https://graph.microsoft.com/$graphApiVersion/deviceManagement/configurationPolicies/$($response.Id)/assignments"
+            $uri = "https://graph.microsoft.com/$graphApiVersion/deviceManagement/configurationPolicies/$($policyResponse.Id)/assignments"
             $currentAssignments = Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject
             if ($currentAssignments) {
-                Write-Output "Current assignments found: $policyName"
+                Write-Output "Current assignments found: $($policyResponse.Name)"
             }
             else {
-                Write-Warning "No current assignments found: $policyName"
+                Write-Warning "No current assignments found: $($policyResponse.Name)"
             }
         }
         catch {
