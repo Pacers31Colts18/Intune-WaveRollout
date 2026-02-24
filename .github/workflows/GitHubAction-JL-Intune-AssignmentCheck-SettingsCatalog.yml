@@ -21,12 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download policy artifacts
-        uses: actions/download-artifact@v6
-        with:
-          name: intune-assignments
-          path: ./artifacts
-
       - name: Install Graph Modules
         shell: pwsh
         run: |
