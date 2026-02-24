@@ -1,4 +1,4 @@
-name: Intune-WaveRollout-AssignmentCheck
+name: Intune_Assignment-Check
 
 on:
   workflow_run:
