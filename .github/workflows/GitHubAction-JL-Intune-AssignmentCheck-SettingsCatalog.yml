@@ -17,6 +17,7 @@ env:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    environment: GraphApi
 
     steps:
       - uses: actions/checkout@v4
