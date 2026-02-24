@@ -25,9 +25,9 @@ function Get-IntuneDeviceConfigurationPolicyAssignments {
     $policyResponse = Invoke-MgGraphRequest -Uri $uri -Method GET
 
     if ($policyResponse) {
-        Write-Output "Policy found..."
-        Write-Output "PolicyName: $($policyResponse.Name)"
-        Write-Output "PolicyId: $($policyResponse.id)"
+        #Write-Output "Policy found..."
+        #Write-Output "PolicyName: $($policyResponse.Name)"
+        #Write-Output "PolicyId: $($policyResponse.id)"
     }
     else {
         Write-Error "No Settings Catalog policy found: $policyName"
@@ -40,7 +40,7 @@ function Get-IntuneDeviceConfigurationPolicyAssignments {
             $uri = "https://graph.microsoft.com/$graphApiVersion/deviceManagement/configurationPolicies/$($policyResponse.Id)/assignments"
             $currentAssignments = Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject
             if ($currentAssignments) {
-                Write-Output "Current assignments found: $($policyResponse.Name)"
+               # Write-Output "Current assignments found: $($policyResponse.Name)"
             }
             else {
                 Write-Warning "No current assignments found: $($policyResponse.Name)"
