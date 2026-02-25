@@ -7,10 +7,6 @@ on:
         description: "Policy ID (GUID) to check or assign"
         required: true
         type: string
-      policy_name:
-        description: "Policy Name (for logging)"
-        required: true
-        type: string
       group_name:
         description: "Azure AD Group Name to assign"
         required: true
@@ -57,7 +53,6 @@ jobs:
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           allow-no-subscriptions: true
 
       - name: Install Graph Modules
@@ -72,17 +67,12 @@ jobs:
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
 
-      - name: Import Module
-        shell: pwsh
-        run: |
-          Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
       - name: Check Assignment
         id: check_assignment
         shell: pwsh
         run: |
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
           $policyId           = '${{ github.event.inputs.policy_id }}'
-          $policyName         = '${{ github.event.inputs.policy_name }}'
           $groupName          = '${{ github.event.inputs.group_name }}'
           $groupAssignmentType = '${{ github.event.inputs.group_assignment_type }}'
           $filterName         = '${{ github.event.inputs.filter_name }}'
@@ -99,7 +89,7 @@ jobs:
               exit 1
           }
 
-          Write-Host "Checking assignments for Policy: $policyName [$policyId]"
+          Write-Host "Checking assignments for Policy: $policyId"
 
           # Get current assignments for the policy
           $currentAssignments = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId
