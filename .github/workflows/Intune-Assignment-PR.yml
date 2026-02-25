@@ -62,14 +62,14 @@ jobs:
               $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId
               }
           # Store JSON as step output
-          $jsonOutput = $current | ConvertTo-Json -Depth 10 -Compress
+          $jsonOutput = $allAssignments | ConvertTo-Json -Depth 10 -Compress
           echo "all_assignments=$jsonOutput" >> $env:GITHUB_OUTPUT
           
-
       # -------------------------------
       # Step 2: Upload artifact of existing assignments
       # -------------------------------
       - name: Upload existing assignments artifact
+        if: ${{ steps.capture.outputs.all_assignments != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
