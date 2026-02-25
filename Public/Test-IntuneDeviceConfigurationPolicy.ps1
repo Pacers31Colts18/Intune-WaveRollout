@@ -23,7 +23,7 @@ function Test-IntuneDeviceConfigurationPolicy {
     #Test Path
     try {
         $testPath = Test-Path -Path $filePath
-        Write-Output "File path is valid: $filePath"
+        Write-Host "File path is valid: $filePath"
     }
     catch {
         Write-Error "An error occurred while testing the file path: $_"
@@ -49,11 +49,11 @@ function Test-IntuneDeviceConfigurationPolicy {
         Write-Error "Policy found...stopping import."
         Write-Error "PolicyName: $($policyResponse.Name)"
         Write-Error "PolicyId: $($policyResponse.id)"
-        exit
+        return $true
     }
     else {
         Write-Host "No Settings Catalog policy found: $policyName"
-        continue
+        return $false
     }
     #endregion
 }
