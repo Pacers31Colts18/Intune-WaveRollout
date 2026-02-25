@@ -7,27 +7,17 @@ function Test-IntuneDeviceConfigurationPolicy {
     # Microsoft Graph Connection check
     if ($null -eq (Get-MgContext)) {
         Write-Error "Authentication needed. Please connect to Microsoft Graph."
-        Break
+        return
     }
 
-    #region Declarations
-    $FunctionName = $MyInvocation.MyCommand.Name.ToString()
-    $date = Get-Date -Format yyyyMMdd-HHmm
-    if ($outputdir.Length -eq 0) { $outputdir = $pwd }
-    $OutputFilePath = "$OutputDir\$FunctionName-$date.csv"
-    $LogFilePath = "$OutputDir\$FunctionName-$date.log"
+    # Initialize
     $graphApiVersion = "beta"
-    $resultCheck = @()
-    #endregion
+    $results = @()
 
-    #Test Path
-    try {
-        $testPath = Test-Path -Path $filePath
-        Write-Host "File path is valid: $filePath"
-    }
-    catch {
-        Write-Error "An error occurred while testing the file path: $_"
-        break
+    # Check folder
+    if (-not (Test-Path -Path $filePath)) {
+        Write-Warning "File path not found: $filePath"
+        return
     }
 
     $jsonFiles = Get-ChildItem -Path $filePath -Filter *.json
@@ -36,25 +26,37 @@ function Test-IntuneDeviceConfigurationPolicy {
         return
     }
 
-    $jsonData = $jsonFiles | ForEach-Object {
-        Get-Content -Path $_.FullName -Raw | ConvertFrom-Json | Select-Object -Property Name, id
-    }    
+    # Loop through JSON files
+    foreach ($file in $jsonFiles) {
+        $policyData = Get-Content -Path $file.FullName -Raw | ConvertFrom-Json | Select-Object -Property Name, id
 
-
-    #region Get Policy
-    $uri = "https://graph.microsoft.com/$graphApiVersion/deviceManagement/configurationPolicies/$($jsonData.id)"
-    $policyResponse = Invoke-MgGraphRequest -Uri $uri -Method GET
-
-    if ($policyResponse) {
-        Write-Error "Policy found...stopping import."
-        $results += [PSCustomObject]@{
-            PolicyName = $policyResponse.Name
-            PolicyId = $policyResponse.id
+        if (-not $policyData.id) {
+            Write-Warning "No ID found in $($file.Name), skipping."
+            continue
         }
-        return $results
+
+        $uri = "https://graph.microsoft.com/$graphApiVersion/deviceManagement/configurationPolicies/$($policyData.id)"
+
+        try {
+            $policyResponse = Invoke-MgGraphRequest -Uri $uri -Method GET -ErrorAction Stop
+        }
+        catch {
+            Write-Host "Policy $($policyData.Name) - $($policyData.id) not found in tenant."
+            continue
+        }
+
+        if ($policyResponse) {
+            $results += [PSCustomObject]@{
+                PolicyName = $policyResponse.Name
+                PolicyId   = $policyResponse.id
+            }
+        }
     }
-    else {
-        Write-Host "No Settings Catalog policy found: $policyName"
+
+    if ($results.Count -gt 0) {
+        Write-Error "Policies found in tenant matching JSON file(s):"
+        Write-Error ($results | Format-Table -AutoSize | Out-String)
     }
-    #endregion
+
+    return $results
 }
