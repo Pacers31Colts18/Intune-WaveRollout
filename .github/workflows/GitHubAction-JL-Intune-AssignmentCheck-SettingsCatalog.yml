@@ -30,6 +30,7 @@ jobs:
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           allow-no-subscriptions: true
 
       - name: Install Graph Modules
@@ -48,7 +49,6 @@ jobs:
           
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-          # Convert input JSON string to array
           $policyIds = '${{ inputs.policy_ids }}' | ConvertFrom-Json
           $allAssignments = @()
 
@@ -74,7 +74,7 @@ jobs:
           if ([string]::IsNullOrEmpty($BRANCH)) {
             echo "pr_number=" >> $env:GITHUB_OUTPUT
             exit 0
-          }
+          fi
 
           $PR = gh pr list --head $BRANCH --state open --json number --jq '.[0].number'
           echo "pr_number=$PR" >> $env:GITHUB_OUTPUT
