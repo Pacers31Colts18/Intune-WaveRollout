@@ -49,6 +49,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
+          
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
           # Convert input JSON string to array
