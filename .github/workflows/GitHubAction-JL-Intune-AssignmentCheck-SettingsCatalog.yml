@@ -17,17 +17,19 @@ env:
 
 jobs:
   gate:
-    # Only run if import workflow succeeded
+    # Only run if the triggering workflow succeeded
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: GraphApi
+    outputs:
+      current_assignments: ${{ steps.capture_assignments.outputs.current_assignments }}
 
     steps:
       - uses: actions/checkout@v4
 
       # 🔽 Download policy IDs artifact from previous workflow
       - name: Download policy IDs artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v4
         with:
           name: policy-ids
           run-id: ${{ github.event.workflow_run.id }}
@@ -35,25 +37,28 @@ jobs:
       - name: Show downloaded file
         run: ls -la
 
+      # Azure login
       - uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
+      # Install Graph modules
       - name: Install Graph Modules
         shell: pwsh
         run: |
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
+      # Connect to Microsoft Graph
       - name: Connect to Microsoft Graph
         shell: pwsh
         run: |
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
 
-      # 🔽 Use policy IDs from artifact
+      # Capture current assignments
       - name: Capture Current Assignments
         id: capture_assignments
         shell: pwsh
@@ -67,7 +72,6 @@ jobs:
           }
 
           $policyIds = Get-Content policy_ids.json | ConvertFrom-Json
-
           $allAssignments = @()
 
           foreach ($id in $policyIds) {
@@ -83,7 +87,7 @@ jobs:
           $json = $allAssignments | ConvertTo-Json -Depth 100
           echo "current_assignments=$json" >> $env:GITHUB_OUTPUT
 
-      # 🔽 Update PR status safely
+      # Find PR created by workflow branch
       - name: Find PR for triggering branch
         id: find_pr
         run: |
@@ -104,6 +108,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Update PR commit status
       - name: Set status check on PR commit
         run: |
           PR="${{ steps.find_pr.outputs.pr_number }}"
