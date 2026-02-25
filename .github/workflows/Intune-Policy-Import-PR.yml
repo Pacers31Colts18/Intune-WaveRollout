@@ -1,4 +1,4 @@
-name: Intune-Policy-Import-PR
+name: GitHubAction-JL-Intune-Check-And-Import-SettingsCatalog
 
 on:
   pull_request:
@@ -6,26 +6,34 @@ on:
     paths:
       - 'staging/policies/**'
 
+  push:
+    branches:
+      - main
+    paths:
+      - 'staging/policies/**'
+
 permissions:
+  id-token: write
   contents: read
   pull-requests: write
   statuses: write
-  id-token: write
 
 env:
   REPO_DIR: ${{ github.workspace }}
-  POLICY_FOLDER: ${{ github.workspace }}/staging/policies
+  STAGING_FOLDER: ${{ github.workspace }}/staging/policies
 
 jobs:
-  import_policy:
+
+  # PR CHECK
+  check_existing:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     environment: GraphApi
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Azure Login
+      - name: Login to Azure
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -38,41 +46,63 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      - name: Test Policy Does Not Already Exist
+      - name: Test for Existing Policies
         shell: pwsh
         run: |
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-          $results = Test-IntuneDeviceConfigurationPolicy -filePath "${{ env.POLICY_FOLDER }}"
+          $results = Test-IntuneDeviceConfigurationPolicy -filePath "${{ env.STAGING_FOLDER }}"
 
-          if ($results) {
-              Write-Error "Policy already exists in tenant. Stopping import."
+          if ($results -and $results.Count -gt 0) {
+              Write-Error "Existing policies detected. Cannot merge."
+              $results | ForEach-Object {
+                  Write-Host "$($_.PolicyName) [$($_.PolicyId)]"
+              }
               exit 1
           }
 
-      - name: Import Policy
+          Write-Host "No existing policies found. PR validation passed."
+
+  # IMPORT JOB ONLY AFTER MERGE
+  import_policy:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: GraphApi
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Install Graph Modules
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
+
+      - name: Import Policies
         shell: pwsh
         run: |
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
-          Import-Module -Name "${{ env.REPO_DIR }}" -Force
-          $import = Import-IntuneSettingsCatalogPolicy -folderPath "${{ env.POLICY_FOLDER }}"
 
-          if (-not $import) {
-              Write-Error "Policy import failed."
-              exit 1
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+
+          $results = Import-IntuneSettingsCatalogPolicy -folderPath "${{ env.STAGING_FOLDER }}"
+
+          if (-not $results) {
+              throw "No policies imported."
           }
 
-          Write-Host "Policy imported successfully."
+          $results | ForEach-Object {
+              Write-Host "Imported: $($_.Name) [$($_.Id)]"
+          }
 
-      - name: Set PR Status Success
-        if: ${{ success() }}
-        run: |
-          gh api repos/${{ github.repository }}/statuses/${{ github.sha }} \
-            -f state=success \
-            -f context="Intune-Policy-Import" \
-            -f description="Policy import successful."
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          Write-Host "Policy import completed successfully."
