@@ -8,6 +8,7 @@ permissions:
   id-token: write
   contents: read
   pull-requests: write
+  statuses: write
 
 env:
   REPO_DIR: ${{ github.workspace }}
