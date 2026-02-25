@@ -43,22 +43,18 @@ jobs:
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
 
-      - name: Import Module
-        shell: pwsh
-        run: |
-          Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
       - name: Test for Existing Policies
         id: test_policies
         shell: pwsh
         run: |
-          # Call the function from your module
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
           Test-IntuneDeviceConfigurationPolicy -filePath "${{ env.STAGING_FOLDER }}"
 
       - name: Import Policies
         id: import_step
         shell: pwsh
         run: |
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
           $results = Import-IntuneSettingsCatalogPolicy -folderPath "${{ env.STAGING_FOLDER }}"
           if (-not $results) { 
               throw "No policies imported."
