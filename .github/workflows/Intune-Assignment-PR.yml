@@ -59,24 +59,10 @@ jobs:
               $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
               $policyId = $json.PolicyId
               Write-Host "Fetching current assignments for PolicyId: $policyId"
-
-              $current = @( Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId )
-
-              if ($current.Count -eq 0) {
-                  Write-Host "No existing assignments found for PolicyId: $policyId"
-              }
-              else {
-                  Write-Host "Found $($current.Count) existing assignment(s) for PolicyId: $policyId"
-              }
-
-              $allAssignments += [PSCustomObject]@{
-                  PolicyId           = $policyId
-                  CurrentAssignments = $current
-              }
-          }
+              $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId
 
           # Store JSON as step output
-          $jsonOutput = $allAssignments | ConvertTo-Json -Depth 10 -Compress
+          $jsonOutput = $current | ConvertTo-Json -Depth 10 -Compress
           echo "all_assignments=$jsonOutput" >> $env:GITHUB_OUTPUT
 
       # -------------------------------
