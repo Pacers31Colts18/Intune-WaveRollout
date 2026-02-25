@@ -38,9 +38,11 @@ function Get-IntuneDeviceConfigurationPolicyAssignments {
     #region Get Current Assignments
         try {
             $uri = "https://graph.microsoft.com/$graphApiVersion/deviceManagement/configurationPolicies/$($policyResponse.Id)/assignments"
-            $currentAssignments = @( (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).value )
+            $currentAssignments = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).value
             if ($currentAssignments) {
-               Write-Output "Current assignments found: $($policyResponse.Name)"
+            Write-Host "Current assignments found: $($policyResponse.Name)"
+            $json = $currentAssignments | ConvertTo-Json -Depth 100
+
             }
             else {
                 Write-Warning "No current assignments found: $($policyResponse.Name)"
@@ -51,7 +53,6 @@ function Get-IntuneDeviceConfigurationPolicyAssignments {
             break
         }
         #endregion
-        $json = $currentAssignments | ConvertTo-Json -Depth 100
         return $json
 }
 
