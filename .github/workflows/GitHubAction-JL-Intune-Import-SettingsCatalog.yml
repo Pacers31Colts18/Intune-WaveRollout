@@ -1,4 +1,4 @@
-name: GitHubAction-JL-Intune-Import-SettingsCatalog
+name: GitHubAction-JL-Intune-Import-And-AssignmentCheck
 
 on:
   pull_request:
@@ -15,6 +15,8 @@ env:
   STAGING_FOLDER: ${{ github.workspace }}/staging
 
 jobs:
+
+  # 1️⃣ Import Policies
   import:
     runs-on: ubuntu-latest
     environment: GraphApi
@@ -28,6 +30,7 @@ jobs:
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           allow-no-subscriptions: true
 
       - name: Install Graph Modules
@@ -40,26 +43,88 @@ jobs:
         id: import_step
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-
-          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
-          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
-
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
           Write-Host "Importing policies from ${{ env.STAGING_FOLDER }}"
           $results = Import-IntuneSettingsCatalogPolicy -folderPath "${{ env.STAGING_FOLDER }}"
 
           if (-not $results) { throw "No policies imported." }
 
-          # Extract policy IDs
           $policyIds = $results | Select-Object -ExpandProperty Id
           $json = $policyIds | ConvertTo-Json -Compress
           "policy_ids=$json" >> $env:GITHUB_OUTPUT
+          Write-Host "Imported policy IDs: $json"
 
-  # Call AssignmentCheck workflow
+  # 2️⃣ Capture Assignments
   assignment_check:
     needs: import
-    uses: ./.github/workflows/GitHubAction-JL-Intune-AssignmentCheck-SettingsCatalog.yml
-    with:
-      policy_ids: ${{ needs.import.outputs.policy_ids }}
+    runs-on: ubuntu-latest
+    environment: GraphApi
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          allow-no-subscriptions: true
+
+      - name: Install Graph Modules
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
+
+      - name: Capture Current Assignments
+        id: capture_assignments
+        shell: pwsh
+        run: |
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
+          
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+
+          $policyIds = '${{ needs.import.outputs.policy_ids }}' | ConvertFrom-Json
+          $allAssignments = @()
+          foreach ($id in $policyIds) {
+              Write-Host "Capturing assignments for policy $id"
+              $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $id
+              $allAssignments += [PSCustomObject]@{
+                  Id          = $id
+                  Assignments = $current
+              }
+          }
+
+          $json = $allAssignments | ConvertTo-Json -Depth 100
+          echo "current_assignments=$json" >> $env:GITHUB_OUTPUT
+
+      - name: Find PR for triggering branch
+        id: find_pr
+        run: |
+          BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          echo "Triggering branch: $BRANCH"
+
+          if ([string]::IsNullOrEmpty($BRANCH)) {
+            echo "pr_number=" >> $env:GITHUB_OUTPUT
+            exit 0
+          fi
+
+          $PR = gh pr list --head $BRANCH --state open --json number --jq '.[0].number'
+          echo "pr_number=$PR" >> $env:GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set status check on PR commit
+        run: |
+          $PR = '${{ steps.find_pr.outputs.pr_number }}'
+          if ([string]::IsNullOrEmpty($PR)) { exit 0 }
+
+          $SHA = "${GITHUB_SHA}"
+
+          gh api repos/${{ github.repository }}/statuses/$SHA \
+            -f state=success \
+            -f context="Status-Gate" \
+            -f description="All required jobs completed successfully."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
