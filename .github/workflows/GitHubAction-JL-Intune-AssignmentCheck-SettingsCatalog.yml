@@ -50,7 +50,6 @@ jobs:
           $ErrorActionPreference = "Stop"
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-          # Get the imported policies JSON from previous workflow
           $artifactFolder = "${{ github.workspace }}/staging"
           $policiesJson = Get-ChildItem -Path $artifactFolder -Filter *.json | ForEach-Object { Get-Content $_.FullName | ConvertFrom-Json }
           
@@ -66,41 +65,42 @@ jobs:
               }
           }
 
-          # Output as JSON so it can be used in next jobs
           $json = $allAssignments | ConvertTo-Json -Depth 100
           echo "current_assignments=$json" >> $GITHUB_OUTPUT
 
-      - name: Find PR created by JL-IntuneWaveRollout workflow
+      - name: Find PR for triggering branch
         id: find_pr
         run: |
-          echo "Searching for PR with branch prefix: JL-IntuneWaveRollout-"
+          BRANCH="${{ github.event.workflow_run.head_branch }}"
+          echo "Triggering branch: $BRANCH"
 
-          PR=$(gh pr list --state open --json number,headRefName \
-               --jq '.[] | select(.headRefName | startswith("JL-IntuneWaveRollout-")) | .number')
+          if [ -z "$BRANCH" ]; then
+            echo "No branch found."
+            echo "pr_number=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
-          echo "PR: $PR"
+          PR=$(gh pr list \
+            --head "$BRANCH" \
+            --state open \
+            --json number \
+            --jq '.[0].number')
+
+          echo "Found PR: $PR"
           echo "pr_number=$PR" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get PR commit SHA
-        id: get_sha
-        if: ${{ steps.find_pr.outputs.pr_number != '' }}
-        run: |
-          PR=${{ steps.find_pr.outputs.pr_number }}
-
-          SHA=$(gh pr view "$PR" --json headRefOid --jq '.headRefOid')
-          echo "PR commit SHA: $SHA"
-
-          echo "sha=$SHA" >> $GITHUB_OUTPUT
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Set status check on PR commit
-        if: ${{ steps.get_sha.outputs.sha != '' }}
         run: |
-          SHA="${{ steps.get_sha.outputs.sha }}"
-          echo "Setting status on PR commit: $SHA"
+          PR="${{ steps.find_pr.outputs.pr_number }}"
+
+          if [ -z "$PR" ]; then
+            echo "No PR found. Skipping status update."
+            exit 0
+          fi
+
+          SHA="${{ github.event.workflow_run.head_sha }}"
 
           gh api \
             repos/${{ github.repository }}/statuses/$SHA \
