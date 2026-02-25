@@ -16,13 +16,12 @@ env:
 
 jobs:
 
-  # IMPORT POLICIES
   import:
     runs-on: ubuntu-latest
     environment: GraphApi
     outputs:
       policy_ids: ${{ steps.import_step.outputs.policy_ids }}
-      
+
     steps:
       - uses: actions/checkout@v4
 
@@ -61,15 +60,23 @@ jobs:
 
           # Extract policy IDs
           $policyIds = $results | Select-Object -ExpandProperty Id
-          
+
           if (-not $policyIds) {
               throw "No policy IDs returned."
           }
-          
-          # Convert to JSON array
+
+          # Convert to JSON array and save as step output
           $json = $policyIds | ConvertTo-Json -Compress
           "policy_ids=$json" >> $env:GITHUB_OUTPUT
 
-          Write-Host "Import complete."
+          # Save JSON to file for artifact
+          $json | Out-File -FilePath policy_ids.json -Encoding utf8
 
-  
+          Write-Host "Import complete. Policy IDs saved to policy_ids.json"
+
+      # Upload artifact for downstream workflow
+      - name: Upload policy IDs artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: policy-ids
+          path: policy_ids.json
