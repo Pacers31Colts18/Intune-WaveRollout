@@ -76,49 +76,61 @@ jobs:
           path: ${{ github.workspace }}/staging/assignments
 
       # -------------------------------
-      # Step 3: Validate JSON assignment files
+      # Step 3: Validate and Merge Assignments
       # -------------------------------
-      - name: Validate Assignment JSON
+      - name: Validate and Merge Assignments
         id: validate
         shell: pwsh
         run: |
-          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
-          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
+      
+          # Load existing assignments from capture artifact
+          $existingAssignmentsPath = '${{ steps.capture.outputs.all_assignments_path }}'
+          if (Test-Path $existingAssignmentsPath) {
+              $existingAssignments = Get-Content $existingAssignmentsPath -Raw | ConvertFrom-Json
+          } else {
+              $existingAssignments = @()
+          }
+      
+          # Load new assignment JSONs
           $jsonFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
           if ($jsonFiles.Count -eq 0) {
               Write-Error "No assignment JSON files found in $($env:ASSIGNMENT_FOLDER)."
               exit 1
           }
-
-          $assignmentsList = @()
+      
+          $mergedAssignments = @()
+      
           foreach ($file in $jsonFiles) {
               $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
-
-              if (-not $json.PolicyId) {
-                  Write-Error "PolicyId is required in $($file.Name)."
-                  exit 1
+              if (-not $json.PolicyId) { throw "PolicyId required in $($file.Name)" }
+              if (-not ($json.AssignmentMode -in @("Merge","Overwrite"))) { throw "AssignmentMode must be Merge or Overwrite in $($file.Name)" }
+      
+              # Find existing assignments for this policy
+              $current = $existingAssignments | Where-Object { $_.PolicyId -eq $json.PolicyId }
+              $currentAssignments = @()
+              if ($current) {
+                  $currentAssignments = $current.CurrentAssignments
               }
-
-              if (-not ($json.AssignmentMode -in @("Merge","Overwrite"))) {
-                  Write-Error "AssignmentMode must be 'Merge' or 'Overwrite' in $($file.Name)."
-                  exit 1
+      
+              # Merge or overwrite
+              if ($json.AssignmentMode -eq "Overwrite") {
+                  $finalAssignments = $json.Assignments
+              } else {
+                  $finalAssignments = $currentAssignments + $json.Assignments
               }
-
-              $uri = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$($json.PolicyId)"
-              $policy = Invoke-MgGraphRequest -Uri $uri -Method GET
-
-              if (-not $policy) {
-                  Write-Error "PolicyId $($json.PolicyId) not found in tenant."
-                  exit 1
+      
+              $mergedAssignments += [PSCustomObject]@{
+                  PolicyId   = $json.PolicyId
+                  Assignments = $finalAssignments
+                  AssignmentMode = $json.AssignmentMode
               }
-
-              Write-Host "Policy validated: $($policy.DisplayName) [$($policy.Id)]"
-              $assignmentsList += $json
           }
-
-          echo "validated_assignments=$(ConvertTo-Json $assignmentsList -Compress)" >> $GITHUB_OUTPUT
+      
+          # Write merged assignments to file for artifact
+          $mergedPath = "${{ github.workspace }}/merged-assignments.json"
+          $mergedAssignments | ConvertTo-Json -Depth 10 | Set-Content -Path $mergedPath -Force
+          echo "merged_assignments_path=$mergedPath" >> $GITHUB_OUTPUT
 
       # -------------------------------
       # Step 4: Apply assignments
