@@ -1,4 +1,4 @@
-name: Intune-Assignment-PR
+name: GitHubAction-JL-Intune-Assignment-PR-And-Apply
 
 on:
   pull_request:
@@ -6,31 +6,40 @@ on:
     paths:
       - 'staging/assignments/**'
 
+  push:
+    branches:
+      - main
+    paths:
+      - 'staging/assignments/**'
+
 permissions:
+  id-token: write
   contents: read
   pull-requests: write
   statuses: write
-  id-token: write
 
 env:
   REPO_DIR: ${{ github.workspace }}
   ASSIGNMENT_FOLDER: ${{ github.workspace }}/staging/assignments
 
 jobs:
-  manage_assignments:
+
+  # =====================================================
+  # PR VALIDATION JOB (NO ASSIGNMENTS APPLIED)
+  # =====================================================
+  validate_assignments:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     environment: GraphApi
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Azure Login
+      - name: Login to Azure
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           allow-no-subscriptions: true
 
       - name: Install Graph Modules
@@ -39,47 +48,98 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      - name: Connect to Graph
+      - name: Validate Assignment Configuration
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
 
-      - name: Import Module
-        shell: pwsh
-        run: |
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-      - name: Process Assignment File
+          $file = Get-ChildItem "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json | Select-Object -First 1
+
+          if (-not $file) {
+              throw "No assignment JSON file found."
+          }
+
+          $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
+
+          if ($json.AssignmentMode -notin @("Merge","Overwrite")) {
+              throw "AssignmentMode must be Merge or Overwrite."
+          }
+
+          Write-Host "Assignment Mode: $($json.AssignmentMode)"
+
+          $policy = Get-MgBetaDeviceManagementConfigurationPolicy -Filter "name eq '$($json.PolicyName)'"
+
+          if (-not $policy) {
+              throw "Policy '$($json.PolicyName)' not found in tenant."
+          }
+
+          Write-Host "Policy exists: $($policy.Name) [$($policy.Id)]"
+
+          foreach ($assignment in $json.Assignments) {
+
+              if ($assignment.AssignmentType -notin @("Include","Exclude")) {
+                  throw "AssignmentType must be Include or Exclude."
+              }
+
+              if ($assignment.FilterMode -notin @("Include","Exclude","None")) {
+                  throw "FilterMode must be Include, Exclude, or None."
+              }
+
+              Write-Host "Validated assignment for group: $($assignment.GroupName)"
+          }
+
+          Write-Host "Assignment validation passed."
+
+  # =====================================================
+  # APPLY ASSIGNMENTS (AFTER MERGE TO MAIN)
+  # =====================================================
+  apply_assignments:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: GraphApi
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Install Graph Modules
         shell: pwsh
         run: |
+          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
+
+      - name: Apply Assignment Configuration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
+
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+
           $file = Get-ChildItem "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json | Select-Object -First 1
           $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
 
-          $policyName = $json.PolicyName
-          $mode = $json.AssignmentMode
-          $desiredAssignments = $json.Assignments
-
-          if ($mode -notin @("Merge","Overwrite")) {
-              Write-Error "Invalid AssignmentMode: $mode"
-              exit 1
-          }
-
-          Write-Host "Assignment Mode: $mode"
-
-          # Get policy by name
-          $policy = Get-MgBetaDeviceManagementConfigurationPolicy -Filter "name eq '$policyName'"
-
-          if (-not $policy) {
-              Write-Error "Policy '$policyName' not found in tenant."
-              exit 1
-          }
-
+          $policy = Get-MgBetaDeviceManagementConfigurationPolicy -Filter "name eq '$($json.PolicyName)'"
           $policyId = $policy.Id
 
           $currentAssignments = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId
+          $desiredAssignments = $json.Assignments
+          $mode = $json.AssignmentMode
 
-          # --- MERGE ---
+          # ---- MERGE MODE ----
           foreach ($desired in $desiredAssignments) {
 
               $exists = $currentAssignments | Where-Object {
@@ -101,7 +161,7 @@ jobs:
               }
           }
 
-          # --- OVERWRITE ---
+          # ---- OVERWRITE MODE ----
           if ($mode -eq "Overwrite") {
 
               foreach ($current in $currentAssignments) {
@@ -123,12 +183,4 @@ jobs:
               }
           }
 
-      - name: Set PR Status Success
-        if: ${{ success() }}
-        run: |
-          gh api repos/${{ github.repository }}/statuses/${{ github.sha }} \
-            -f state=success \
-            -f context="Intune-Assignment-Controller" \
-            -f description="Assignment processing completed successfully."
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          Write-Host "Assignment processing complete."
