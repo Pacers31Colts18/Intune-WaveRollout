@@ -17,13 +17,23 @@ env:
 
 jobs:
   gate:
+    # Only run if import workflow succeeded
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: GraphApi
-    outputs:
-      current_assignments: ${{ steps.capture_assignments.outputs.current_assignments }}
 
     steps:
       - uses: actions/checkout@v4
+
+      # 🔽 Download policy IDs artifact from previous workflow
+      - name: Download policy IDs artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: policy-ids
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Show downloaded file
+        run: ls -la
 
       - uses: azure/login@v2
         with:
@@ -43,39 +53,43 @@ jobs:
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
 
+      # 🔽 Use policy IDs from artifact
       - name: Capture Current Assignments
         id: capture_assignments
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-          $artifactFolder = "${{ github.workspace }}/staging"
-          $policiesJson = Get-ChildItem -Path $artifactFolder -Filter *.json | ForEach-Object { Get-Content $_.FullName | ConvertFrom-Json }
-          
+          if (-not (Test-Path "policy_ids.json")) {
+              throw "policy_ids.json not found."
+          }
+
+          $policyIds = Get-Content policy_ids.json | ConvertFrom-Json
+
           $allAssignments = @()
 
-          foreach ($policy in $policiesJson) {
-              Write-Host "Capturing assignments for $($policy.Name) ($($policy.Id))"
-              $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policy.Id
+          foreach ($id in $policyIds) {
+              Write-Host "Capturing assignments for policy $id"
+              $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $id
+
               $allAssignments += [PSCustomObject]@{
-                  Name = $policy.Name
-                  Id   = $policy.Id
+                  Id          = $id
                   Assignments = $current
               }
           }
 
           $json = $allAssignments | ConvertTo-Json -Depth 100
-          echo "current_assignments=$json" >> $GITHUB_OUTPUT
+          echo "current_assignments=$json" >> $env:GITHUB_OUTPUT
 
+      # 🔽 Update PR status safely
       - name: Find PR for triggering branch
         id: find_pr
         run: |
           BRANCH="${{ github.event.workflow_run.head_branch }}"
-          echo "Triggering branch: $BRANCH"
 
           if [ -z "$BRANCH" ]; then
-            echo "No branch found."
             echo "pr_number=" >> $GITHUB_OUTPUT
             exit 0
           fi
@@ -86,7 +100,6 @@ jobs:
             --json number \
             --jq '.[0].number')
 
-          echo "Found PR: $PR"
           echo "pr_number=$PR" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
