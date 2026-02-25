@@ -12,10 +12,8 @@ permissions:
 env:
   REPO_DIR: ${{ github.workspace }}
   STAGING_FOLDER: ${{ github.workspace }}/staging
-  CSV_PATH: ${{ github.workspace }}/staging/staging.csv
 
 jobs:
-
   import:
     runs-on: ubuntu-latest
     environment: GraphApi
@@ -43,40 +41,24 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          # Connect to Graph
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
 
-          # Load module
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-          # Import policies
           Write-Host "Importing policies from ${{ env.STAGING_FOLDER }}"
           $results = Import-IntuneSettingsCatalogPolicy -folderPath "${{ env.STAGING_FOLDER }}"
 
-          if (-not $results) { 
-              throw "No policies imported."
-          }
+          if (-not $results) { throw "No policies imported." }
 
           # Extract policy IDs
           $policyIds = $results | Select-Object -ExpandProperty Id
-
-          if (-not $policyIds) {
-              throw "No policy IDs returned."
-          }
-
-          # Convert to JSON array and save as step output
           $json = $policyIds | ConvertTo-Json -Compress
           "policy_ids=$json" >> $env:GITHUB_OUTPUT
 
-          # Save JSON to file for artifact
-          $json | Out-File -FilePath policy_ids.json -Encoding utf8
-
-          Write-Host "Import complete. Policy IDs saved to policy_ids.json"
-
-      # Upload artifact for downstream workflow
-      - name: Upload policy IDs artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: policy-ids
-          path: policy_ids.json
+  # Call AssignmentCheck workflow
+  assignment_check:
+    needs: import
+    uses: ./.github/workflows/assignment-check.yml
+    with:
+      policy_ids: ${{ needs.import.outputs.policy_ids }}
