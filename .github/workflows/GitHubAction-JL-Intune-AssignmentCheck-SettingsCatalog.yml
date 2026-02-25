@@ -70,13 +70,13 @@ jobs:
           $json = $allAssignments | ConvertTo-Json -Depth 100
           echo "current_assignments=$json" >> $GITHUB_OUTPUT
 
-      - name: Find PR created by JL-IntuneDocs workflow
+      - name: Find PR created by JL-IntuneWaveRollout workflow
         id: find_pr
         run: |
           echo "Searching for PR with branch prefix: JL-IntuneWaveRollout-"
 
           PR=$(gh pr list --state open --json number,headRefName \
-               --jq '.[] | select(.headRefName | startswith("JL-IntuneDocs-")) | .number')
+               --jq '.[] | select(.headRefName | startswith("JL-IntuneWaveRollout-")) | .number')
 
           echo "PR: $PR"
           echo "pr_number=$PR" >> $GITHUB_OUTPUT
