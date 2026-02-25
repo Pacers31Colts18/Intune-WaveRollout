@@ -49,11 +49,14 @@ function Test-IntuneDeviceConfigurationPolicy {
         Write-Error "Policy found...stopping import."
         Write-Error "PolicyName: $($policyResponse.Name)"
         Write-Error "PolicyId: $($policyResponse.id)"
-        return $true
+        $results += [PSCustomObject]@{
+            PolicyName = $policyResponse.Name
+            PolicyId = $policyResponse.id
+        }
+        return $results
     }
     else {
         Write-Host "No Settings Catalog policy found: $policyName"
-        return $false
     }
     #endregion
 }
