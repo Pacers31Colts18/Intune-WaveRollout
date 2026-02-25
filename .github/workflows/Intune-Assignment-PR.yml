@@ -88,26 +88,24 @@ jobs:
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
           $assignmentsList = '${{ steps.validate.outputs.validated_assignments }}' | ConvertFrom-Json
           $allAssignments = @()
-
+      
           foreach ($item in $assignmentsList) {
               Write-Host "Fetching current assignments for PolicyId: $($item.PolicyId)"
-              $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $item.PolicyId
-
-              if (-not $current -or $current.Count -eq 0) {
+              $current = @( Get-IntuneDeviceConfigurationPolicyAssignments -policyId $item.PolicyId )
+      
+              if ($current.Count -eq 0) {
                   Write-Host "No existing assignments found for PolicyId: $($item.PolicyId)"
               }
               else {
                   Write-Host "Found $($current.Count) existing assignment(s) for PolicyId: $($item.PolicyId)"
               }
-
+      
               $allAssignments += [PSCustomObject]@{
-                  PolicyId          = $item.PolicyId
+                  PolicyId           = $item.PolicyId
                   CurrentAssignments = $current
-                  NewAssignments     = $item.Assignments
-                  Mode               = $item.AssignmentMode
               }
           }
-
+      
           echo "all_assignments=$(ConvertTo-Json $allAssignments -Depth 10 -Compress)" >> $GITHUB_OUTPUT
 
       - name: Apply Assignments
