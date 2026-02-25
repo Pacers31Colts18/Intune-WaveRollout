@@ -37,30 +37,38 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      - name: Connect to Microsoft Graph
-        shell: pwsh
-        run: |
-          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
-          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
-
       - name: Test for Existing Policies
         id: test_policies
         shell: pwsh
         run: |
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-          Test-IntuneDeviceConfigurationPolicy -filePath "${{ env.STAGING_FOLDER }}"
+          $results = Test-IntuneDeviceConfigurationPolicy -filePath "${{ env.STAGING_FOLDER }}"
+
+          if ($results -and $results.Count -gt 0) {
+              Write-Error "Existing policies detected. Stopping workflow."
+              Write-Host "Policy Name(s) and ID(s):"
+              $results | ForEach-Object { Write-Host "$($_.PolicyName) [$($_.PolicyId)]" }
+              exit 1
+          }
+          else {
+              Write-Host "No existing policies found. Proceeding with import."
+          }
 
       - name: Import Policies
         id: import_step
         shell: pwsh
         run: |
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
           $results = Import-IntuneSettingsCatalogPolicy -folderPath "${{ env.STAGING_FOLDER }}"
           if (-not $results) { 
               throw "No policies imported."
           }
 
-          # Extract policy IDs and output
+          # Extract policy IDs and set as output
           $policyIds = $results | Select-Object -ExpandProperty Id
           $json = $policyIds | ConvertTo-Json -Compress
           "policy_ids=$json" >> $env:GITHUB_OUTPUT
