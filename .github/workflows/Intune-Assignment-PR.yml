@@ -80,7 +80,7 @@ jobs:
 
           echo "Assignments validated successfully."
           echo "validated_assignments=$(ConvertTo-Json $assignmentsList -Compress)" >> $GITHUB_OUTPUT
-
+          
       - name: Capture Existing Assignments
         id: capture
         shell: pwsh
@@ -92,8 +92,16 @@ jobs:
           foreach ($item in $assignmentsList) {
               Write-Host "Fetching current assignments for PolicyId: $($item.PolicyId)"
               $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $item.PolicyId
+
+              if (-not $current -or $current.Count -eq 0) {
+                  Write-Host "No existing assignments found for PolicyId: $($item.PolicyId)"
+              }
+              else {
+                  Write-Host "Found $($current.Count) existing assignment(s) for PolicyId: $($item.PolicyId)"
+              }
+
               $allAssignments += [PSCustomObject]@{
-                  PolicyId    = $item.PolicyId
+                  PolicyId          = $item.PolicyId
                   CurrentAssignments = $current
                   NewAssignments     = $item.Assignments
                   Mode               = $item.AssignmentMode
