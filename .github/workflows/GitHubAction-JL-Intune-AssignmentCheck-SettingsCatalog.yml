@@ -1,11 +1,38 @@
-name: GitHubAction-JL-Intune-AssignmentCheck-SettingsCatalog
+name: GitHubAction-JL-Intune-AssignmentCheck
 
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
-      policy_ids:
+      policy_id:
+        description: "Policy ID (GUID) to check or assign"
         required: true
         type: string
+      policy_name:
+        description: "Policy Name (for logging)"
+        required: true
+        type: string
+      group_name:
+        description: "Azure AD Group Name to assign"
+        required: true
+        type: string
+      group_assignment_type:
+        description: "Group assignment type"
+        required: true
+        type: choice
+        options:
+          - Include
+          - Exclude
+      filter_name:
+        description: "Filter Name (optional)"
+        required: false
+        type: string
+      filter_mode:
+        description: "Filter Mode"
+        required: false
+        type: choice
+        options:
+          - Include
+          - Exclude
 
 permissions:
   pull-requests: write
@@ -17,16 +44,16 @@ env:
   REPO_DIR: ${{ github.workspace }}
 
 jobs:
-  gate:
+  assignment_check:
     runs-on: ubuntu-latest
     environment: GraphApi
-    outputs:
-      current_assignments: ${{ steps.capture_assignments.outputs.current_assignments }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: azure/login@v2
+      - name: Login to Azure
+        uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -39,58 +66,64 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      - name: Capture Current Assignments
-        id: capture_assignments
+      - name: Connect to Microsoft Graph
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
-          
+
+      - name: Import Module
+        shell: pwsh
+        run: |
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-          $policyIds = '${{ inputs.policy_ids }}' | ConvertFrom-Json
-          $allAssignments = @()
+      - name: Check Assignment
+        id: check_assignment
+        shell: pwsh
+        run: |
+          $policyId           = '${{ github.event.inputs.policy_id }}'
+          $policyName         = '${{ github.event.inputs.policy_name }}'
+          $groupName          = '${{ github.event.inputs.group_name }}'
+          $groupAssignmentType = '${{ github.event.inputs.group_assignment_type }}'
+          $filterName         = '${{ github.event.inputs.filter_name }}'
+          $filterMode         = '${{ github.event.inputs.filter_mode }}'
 
-          foreach ($id in $policyIds) {
-              Write-Host "Capturing assignments for policy $id"
-              $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $id
-
-              $allAssignments += [PSCustomObject]@{
-                  Id          = $id
-                  Assignments = $current
-              }
+          # Validate choice inputs
+          if ($groupAssignmentType -notin @("Include","Exclude")) {
+              Write-Error "Invalid group assignment type: $groupAssignmentType. Must be Include or Exclude."
+              exit 1
           }
 
-          $json = $allAssignments | ConvertTo-Json -Depth 100
+          if ($filterMode -and ($filterMode -notin @("Include","Exclude"))) {
+              Write-Error "Invalid filter mode: $filterMode. Must be Include or Exclude."
+              exit 1
+          }
+
+          Write-Host "Checking assignments for Policy: $policyName [$policyId]"
+
+          # Get current assignments for the policy
+          $currentAssignments = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId
+
+          if ($currentAssignments) {
+              $match = $currentAssignments | Where-Object {
+                  ($_.Target.GroupName -eq $groupName) -and
+                  ($_.Target.AssignmentType -eq $groupAssignmentType) -and
+                  ($_.FilterName -eq $filterName) -and
+                  ($_.FilterMode -eq $filterMode)
+              }
+
+              if ($match) {
+                  Write-Host "Assignment already exists:"
+                  $match | Format-Table -AutoSize
+              }
+              else {
+                  Write-Host "No matching assignment found. You may need to create it."
+              }
+          }
+          else {
+              Write-Host "No assignments found for this policy."
+          }
+
+          # Output current assignments as JSON
+          $json = $currentAssignments | ConvertTo-Json -Depth 10
           echo "current_assignments=$json" >> $env:GITHUB_OUTPUT
-
-      - name: Find PR for triggering branch
-        id: find_pr
-        run: |
-          BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-          echo "Triggering branch: $BRANCH"
-
-          if ([string]::IsNullOrEmpty($BRANCH)) {
-            echo "pr_number=" >> $env:GITHUB_OUTPUT
-            exit 0
-          fi
-
-          $PR = gh pr list --head $BRANCH --state open --json number --jq '.[0].number'
-          echo "pr_number=$PR" >> $env:GITHUB_OUTPUT
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set status check on PR commit
-        run: |
-          $PR = '${{ steps.find_pr.outputs.pr_number }}'
-          if ([string]::IsNullOrEmpty($PR)) { exit 0 }
-
-          $SHA = "${GITHUB_SHA}"
-
-          gh api repos/${{ github.repository }}/statuses/$SHA \
-            -f state=success \
-            -f context="Status-Gate" \
-            -f description="All required jobs completed successfully."
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
