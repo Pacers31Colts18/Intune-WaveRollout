@@ -47,8 +47,6 @@ function Test-IntuneDeviceConfigurationPolicy {
 
     if ($policyResponse) {
         Write-Error "Policy found...stopping import."
-        Write-Error "PolicyName: $($policyResponse.Name)"
-        Write-Error "PolicyId: $($policyResponse.id)"
         $results += [PSCustomObject]@{
             PolicyName = $policyResponse.Name
             PolicyId = $policyResponse.id
