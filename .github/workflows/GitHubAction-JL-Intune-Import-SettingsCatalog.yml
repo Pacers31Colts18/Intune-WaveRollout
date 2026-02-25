@@ -59,6 +59,6 @@ jobs:
   # Call AssignmentCheck workflow
   assignment_check:
     needs: import
-    uses: ./.github/workflows/assignment-check.yml
+    uses: ./.github/workflows/GitHubAction-JL-Intune-AssignmentCheck-SettingsCatalog.yml
     with:
       policy_ids: ${{ needs.import.outputs.policy_ids }}
