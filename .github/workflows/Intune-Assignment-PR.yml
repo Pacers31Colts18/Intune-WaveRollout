@@ -13,6 +13,7 @@ permissions:
 env:
   REPO_DIR: ${{ github.workspace }}
   ASSIGNMENT_FOLDER: ${{ github.workspace }}/staging/assignments
+  ARTIFACT_NAME: existing-assignments
 
 jobs:
   validate_and_apply_assignments:
@@ -36,15 +37,66 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      - name: Validate Assignment JSON
-        id: validate
+      # -------------------------------
+      # Step 1: Capture Existing Assignments
+      # -------------------------------
+      - name: Capture Existing Assignments
+        id: capture
         shell: pwsh
         run: |
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-          
-          # Ensure at least one JSON file exists
+
+          $jsonFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
+          if ($jsonFiles.Count -eq 0) {
+              Write-Warning "No assignment JSON files found in $($env:ASSIGNMENT_FOLDER)"
+              exit 0
+          }
+
+          $allAssignments = @()
+          foreach ($file in $jsonFiles) {
+              $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
+              $policyId = $json.PolicyId
+              Write-Host "Fetching current assignments for PolicyId: $policyId"
+
+              $current = @( Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId )
+
+              if ($current.Count -eq 0) {
+                  Write-Host "No existing assignments found for PolicyId: $policyId"
+              }
+              else {
+                  Write-Host "Found $($current.Count) existing assignment(s) for PolicyId: $policyId"
+              }
+
+              $allAssignments += [PSCustomObject]@{
+                  PolicyId           = $policyId
+                  CurrentAssignments = $current
+              }
+          }
+
+          # Store JSON as step output
+          $jsonOutput = $allAssignments | ConvertTo-Json -Depth 10 -Compress
+          echo "all_assignments=$jsonOutput" >> $env:GITHUB_OUTPUT
+
+      # -------------------------------
+      # Step 2: Upload artifact of existing assignments
+      # -------------------------------
+      - name: Upload existing assignments artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ github.workspace }}/staging/assignments
+
+      # -------------------------------
+      # Step 3: Validate JSON assignment files
+      # -------------------------------
+      - name: Validate Assignment JSON
+        id: validate
+        shell: pwsh
+        run: |
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+
           $jsonFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
           if ($jsonFiles.Count -eq 0) {
               Write-Error "No assignment JSON files found in $($env:ASSIGNMENT_FOLDER)."
@@ -52,7 +104,6 @@ jobs:
           }
 
           $assignmentsList = @()
-
           foreach ($file in $jsonFiles) {
               $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
 
@@ -74,57 +125,33 @@ jobs:
                   exit 1
               }
 
-              Write-Host "Policy found: $($policy.DisplayName) [$($policy.Id)]"
+              Write-Host "Policy validated: $($policy.DisplayName) [$($policy.Id)]"
               $assignmentsList += $json
           }
 
-          echo "Assignments validated successfully."
           echo "validated_assignments=$(ConvertTo-Json $assignmentsList -Compress)" >> $GITHUB_OUTPUT
-          
-      - name: Capture Existing Assignments
-        id: capture
-        shell: pwsh
-        run: |
-          Import-Module -Name "${{ env.REPO_DIR }}" -Force
-          $assignmentsList = '${{ steps.validate.outputs.validated_assignments }}' | ConvertFrom-Json
-          $allAssignments = @()
-      
-          foreach ($item in $assignmentsList) {
-              Write-Host "Fetching current assignments for PolicyId: $($item.PolicyId)"
-              $current = @( Get-IntuneDeviceConfigurationPolicyAssignments -policyId $item.PolicyId )
-      
-              if ($current.Count -eq 0) {
-                  Write-Host "No existing assignments found for PolicyId: $($item.PolicyId)"
-              }
-              else {
-                  Write-Host "Found $($current.Count) existing assignment(s) for PolicyId: $($item.PolicyId)"
-              }
-      
-              $allAssignments += [PSCustomObject]@{
-                  PolicyId           = $item.PolicyId
-                  CurrentAssignments = $current
-              }
-          }
-      
-          echo "all_assignments=$(ConvertTo-Json $allAssignments -Depth 10 -Compress)" >> $GITHUB_OUTPUT
 
+      # -------------------------------
+      # Step 4: Apply assignments
+      # -------------------------------
       - name: Apply Assignments
         shell: pwsh
         run: |
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-          $allAssignments = '${{ steps.capture.outputs.all_assignments }}' | ConvertFrom-Json
+
+          $allAssignments = '${{ steps.validate.outputs.validated_assignments }}' | ConvertFrom-Json
 
           foreach ($assignment in $allAssignments) {
-              Write-Host "Applying assignments for PolicyId: $($assignment.PolicyId) with mode: $($assignment.Mode)"
+              Write-Host "Applying assignments for PolicyId: $($assignment.PolicyId) with mode: $($assignment.AssignmentMode)"
 
-              if ($assignment.Mode -eq "Overwrite") {
+              if ($assignment.AssignmentMode -eq "Overwrite") {
                   # Remove existing assignments first
                   Write-Host "Overwriting existing assignments..."
                   Set-IntuneDeviceConfigurationPolicyAssignments -PolicyId $assignment.PolicyId -Assignments @() -Mode Overwrite
               }
 
               # Merge new assignments
-              foreach ($a in $assignment.NewAssignments) {
+              foreach ($a in $assignment.Assignments) {
                   Write-Host "Assigning Group: $($a.GroupName), Type: $($a.AssignmentType), Filter: $($a.FilterName), FilterMode: $($a.FilterMode)"
                   Set-IntuneDeviceConfigurationPolicyAssignments -PolicyId $assignment.PolicyId -Assignments @($a) -Mode Merge
               }
@@ -132,13 +159,16 @@ jobs:
 
           Write-Host "All assignments applied successfully."
 
+      # -------------------------------
+      # Step 5: Set PR Status
+      # -------------------------------
       - name: Set PR Status
         shell: pwsh
         run: |
           $SHA = "${GITHUB_SHA}"
-          gh api repos/${{ github.repository }}/statuses/$SHA \
-            -f state=success \
-            -f context="Assignment-Gate" \
+          gh api repos/${{ github.repository }}/statuses/$SHA `
+            -f state=success `
+            -f context="Assignment-Gate" `
             -f description="Assignment validation and application completed successfully."
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
