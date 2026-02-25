@@ -1,0 +1,134 @@
+name: Intune-Assignment-PR
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'staging/assignments/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+  id-token: write
+
+env:
+  REPO_DIR: ${{ github.workspace }}
+  ASSIGNMENT_FOLDER: ${{ github.workspace }}/staging/assignments
+
+jobs:
+  manage_assignments:
+    runs-on: ubuntu-latest
+    environment: GraphApi
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          allow-no-subscriptions: true
+
+      - name: Install Graph Modules
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
+
+      - name: Connect to Graph
+        shell: pwsh
+        run: |
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
+
+      - name: Import Module
+        shell: pwsh
+        run: |
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+
+      - name: Process Assignment File
+        shell: pwsh
+        run: |
+          $file = Get-ChildItem "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json | Select-Object -First 1
+          $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
+
+          $policyName = $json.PolicyName
+          $mode = $json.AssignmentMode
+          $desiredAssignments = $json.Assignments
+
+          if ($mode -notin @("Merge","Overwrite")) {
+              Write-Error "Invalid AssignmentMode: $mode"
+              exit 1
+          }
+
+          Write-Host "Assignment Mode: $mode"
+
+          # Get policy by name
+          $policy = Get-MgBetaDeviceManagementConfigurationPolicy -Filter "name eq '$policyName'"
+
+          if (-not $policy) {
+              Write-Error "Policy '$policyName' not found in tenant."
+              exit 1
+          }
+
+          $policyId = $policy.Id
+
+          $currentAssignments = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId
+
+          # --- MERGE ---
+          foreach ($desired in $desiredAssignments) {
+
+              $exists = $currentAssignments | Where-Object {
+                  $_.GroupName      -eq $desired.GroupName -and
+                  $_.AssignmentType -eq $desired.AssignmentType -and
+                  $_.FilterName     -eq $desired.FilterName -and
+                  $_.FilterMode     -eq $desired.FilterMode
+              }
+
+              if (-not $exists) {
+                  Write-Host "Creating assignment for $($desired.GroupName)"
+
+                  New-IntuneDeviceConfigurationPolicyAssignment `
+                      -policyId $policyId `
+                      -GroupName $desired.GroupName `
+                      -AssignmentType $desired.AssignmentType `
+                      -FilterName $desired.FilterName `
+                      -FilterMode $desired.FilterMode
+              }
+          }
+
+          # --- OVERWRITE ---
+          if ($mode -eq "Overwrite") {
+
+              foreach ($current in $currentAssignments) {
+
+                  $existsInDesired = $desiredAssignments | Where-Object {
+                      $_.GroupName      -eq $current.GroupName -and
+                      $_.AssignmentType -eq $current.AssignmentType -and
+                      $_.FilterName     -eq $current.FilterName -and
+                      $_.FilterMode     -eq $current.FilterMode
+                  }
+
+                  if (-not $existsInDesired) {
+                      Write-Host "Removing assignment for $($current.GroupName)"
+
+                      Remove-IntuneDeviceConfigurationPolicyAssignment `
+                          -policyId $policyId `
+                          -GroupName $current.GroupName
+                  }
+              }
+          }
+
+      - name: Set PR Status Success
+        if: ${{ success() }}
+        run: |
+          gh api repos/${{ github.repository }}/statuses/${{ github.sha }} \
+            -f state=success \
+            -f context="Intune-Assignment-Controller" \
+            -f description="Assignment processing completed successfully."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
