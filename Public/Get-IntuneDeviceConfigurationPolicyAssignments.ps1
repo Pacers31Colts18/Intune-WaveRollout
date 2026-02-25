@@ -38,9 +38,9 @@ function Get-IntuneDeviceConfigurationPolicyAssignments {
     #region Get Current Assignments
         try {
             $uri = "https://graph.microsoft.com/$graphApiVersion/deviceManagement/configurationPolicies/$($policyResponse.Id)/assignments"
-            $currentAssignments = Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject
+            $currentAssignments = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).value
             if ($currentAssignments) {
-               # Write-Output "Current assignments found: $($policyResponse.Name)"
+               Write-Output "Current assignments found: $($policyResponse.Name)"
             }
             else {
                 Write-Warning "No current assignments found: $($policyResponse.Name)"
