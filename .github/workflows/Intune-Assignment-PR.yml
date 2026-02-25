@@ -60,10 +60,11 @@ jobs:
               $policyId = $json.PolicyId
               Write-Host "Fetching current assignments for PolicyId: $policyId"
               $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId
-
+              }
           # Store JSON as step output
           $jsonOutput = $current | ConvertTo-Json -Depth 10 -Compress
           echo "all_assignments=$jsonOutput" >> $env:GITHUB_OUTPUT
+          
 
       # -------------------------------
       # Step 2: Upload artifact of existing assignments
