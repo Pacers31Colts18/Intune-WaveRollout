@@ -1,0 +1,12 @@
+{
+  "PolicyId": "1957ad10-7d16-425e-b7f0-2c5a7ce34ec5",
+  "AssignmentMode": "Overwrite",
+  "Assignments": [
+    {
+      "GroupName": "JoeLoveless-WIN-DD-Wave1",
+      "AssignmentType": "Include",
+      "FilterName": null,
+      "FilterMode": "None"
+    }
+  ]
+}
