@@ -1,10 +1,11 @@
 name: GitHubAction-JL-Intune-AssignmentCheck-SettingsCatalog
 
 on:
-  workflow_run:
-    workflows: ["GitHubAction-JL-Intune-Import-SettingsCatalog"]
-    types:
-      - completed
+  workflow_call:
+    inputs:
+      policy_ids:
+        required: true
+        type: string
 
 permissions:
   pull-requests: write
@@ -17,8 +18,6 @@ env:
 
 jobs:
   gate:
-    # Only run if the triggering workflow succeeded
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: GraphApi
     outputs:
@@ -27,51 +26,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 🔽 Download policy IDs artifact from previous workflow
-      - name: Download policy IDs artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: policy-ids
-          run-id: ${{ github.event.workflow_run.id }}
-
-      - name: Show downloaded file
-        run: ls -la
-
-      # Azure login
       - uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      # Install Graph modules
       - name: Install Graph Modules
         shell: pwsh
         run: |
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      # Connect to Microsoft Graph
       - name: Connect to Microsoft Graph
         shell: pwsh
         run: |
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
 
-      # Capture current assignments
       - name: Capture Current Assignments
         id: capture_assignments
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-          if (-not (Test-Path "policy_ids.json")) {
-              throw "policy_ids.json not found."
-          }
-
-          $policyIds = Get-Content policy_ids.json | ConvertFrom-Json
+          # Convert input JSON string to array
+          $policyIds = '${{ inputs.policy_ids }}' | ConvertFrom-Json
           $allAssignments = @()
 
           foreach ($id in $policyIds) {
@@ -87,41 +68,30 @@ jobs:
           $json = $allAssignments | ConvertTo-Json -Depth 100
           echo "current_assignments=$json" >> $env:GITHUB_OUTPUT
 
-      # Find PR created by workflow branch
       - name: Find PR for triggering branch
         id: find_pr
         run: |
-          BRANCH="${{ github.event.workflow_run.head_branch }}"
+          BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          echo "Triggering branch: $BRANCH"
 
-          if [ -z "$BRANCH" ]; then
-            echo "pr_number=" >> $GITHUB_OUTPUT
+          if ([string]::IsNullOrEmpty($BRANCH)) {
+            echo "pr_number=" >> $env:GITHUB_OUTPUT
             exit 0
-          fi
+          }
 
-          PR=$(gh pr list \
-            --head "$BRANCH" \
-            --state open \
-            --json number \
-            --jq '.[0].number')
-
-          echo "pr_number=$PR" >> $GITHUB_OUTPUT
+          $PR = gh pr list --head $BRANCH --state open --json number --jq '.[0].number'
+          echo "pr_number=$PR" >> $env:GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Update PR commit status
       - name: Set status check on PR commit
         run: |
-          PR="${{ steps.find_pr.outputs.pr_number }}"
+          $PR = '${{ steps.find_pr.outputs.pr_number }}'
+          if ([string]::IsNullOrEmpty($PR)) { exit 0 }
 
-          if [ -z "$PR" ]; then
-            echo "No PR found. Skipping status update."
-            exit 0
-          fi
+          $SHA = "${GITHUB_SHA}"
 
-          SHA="${{ github.event.workflow_run.head_sha }}"
-
-          gh api \
-            repos/${{ github.repository }}/statuses/$SHA \
+          gh api repos/${{ github.repository }}/statuses/$SHA \
             -f state=success \
             -f context="Status-Gate" \
             -f description="All required jobs completed successfully."
