@@ -109,26 +109,7 @@ jobs:
               Write-Error "No assignment JSON files found in $($env:ASSIGNMENT_FOLDER)."
               exit 1
           }
-
-          $mergedAssignments = @()
-
-          foreach ($file in $jsonFiles) {
-              $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
-              if (-not $json.PolicyId) { throw "PolicyId required in $($file.Name)" }
-
-              # Merge: take existing assignments and add new ones
-              $current = $existingAssignments | Where-Object { $_.PolicyId -eq $json.PolicyId }
-              $currentAssignments = @()
-              if ($current) { $currentAssignments = $current.Assignments }
-
-              $finalAssignments = $currentAssignments + $json.Assignments
-
-              $mergedAssignments += [PSCustomObject]@{
-                  PolicyId    = $json.PolicyId
-                  Assignments = $finalAssignments
-                  AssignmentMode = "Merge"
-              }
-          }
+          Merge-IntuneAssignments -ExistingAssignments $existingAssignments -NewAssignmentFolder "${{ env.ASSIGNMENT_FOLDER }}" -OutputPath "${{ env.MERGED_FILE }}"
 
           # Save merged assignments to file for traceability / artifact
           $mergedAssignments | ConvertTo-Json -Depth 10 | Set-Content -Path "${{ env.MERGED_FILE }}" -Force
