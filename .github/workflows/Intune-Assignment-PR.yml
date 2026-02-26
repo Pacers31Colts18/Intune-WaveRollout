@@ -52,36 +52,57 @@ jobs:
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
-          $jsonFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
-          if ($jsonFiles.Count -eq 0) {
-              Write-Warning "No assignment JSON files found in $($env:ASSIGNMENT_FOLDER)"
-              exit 0
+      
+          # Get CSV Files for PolicyIds
+          $csvFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.csv
+          if ($csvFiles.Count -eq 0) {
+              Write-Error "No CSV files found in $($env:ASSIGNMENT_FOLDER)"
+              exit 1
           }
-
+      
           if (-not (Test-Path "${{ env.EXPORT_FOLDER }}")) {
               New-Item -Path "${{ env.EXPORT_FOLDER }}" -ItemType Directory -Force | Out-Null
           }
-
+      
           $allAssignments = @()
-
-          foreach ($file in $jsonFiles) {
-              $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
-              
-              # Get unique PolicyId
-              $policyId = @($json.value | Select-Object -ExpandProperty sourceId -Unique)[0]
-              
-              Write-Host "Fetching current assignments for PolicyId: $policyId"
-          
-              # Export assignments to JSON
-              $currentJson = Export-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId -outputFolder "${{ env.EXPORT_FOLDER }}"
-          
-              $allAssignments += [PSCustomObject]@{
-                  PolicyId    = $policyId
-                  Assignments = ($currentJson | ConvertFrom-Json -Depth 10)
+      
+          # Initialize a set to track processed PolicyIds
+          $processedPolicyIds = @{}
+      
+          # Loop over CSV files
+          foreach ($file in $csvFiles) {
+              $csvData = Import-Csv -Path $file.FullName
+      
+              # Loop over each row in the CSV
+              foreach ($row in $csvData) {
+                  $policyId = $row.PolicyId
+                  if (-not $policyId) {
+                      Write-Warning "PolicyId is missing in the row, skipping..."
+                      continue
+                  }
+      
+                  # Check if this PolicyId has already been processed
+                  if ($processedPolicyIds.Contains($policyId)) {
+                      Write-Host "PolicyId $policyId has already been processed, skipping..."
+                      continue
+                  }
+      
+                  # Mark the PolicyId as processed
+                  $processedPolicyIds[$policyId] = $true
+      
+                  Write-Host "Fetching current assignments for PolicyId: $policyId"
+      
+                  # Export assignments to JSON based on PolicyId
+                  $currentJson = Export-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId -outputFolder "${{ env.EXPORT_FOLDER }}"
+      
+                  # Store assignments for this PolicyId
+                  $allAssignments += [PSCustomObject]@{
+                      PolicyId    = $policyId
+                      Assignments = ($currentJson | ConvertFrom-Json -Depth 10)
+                  }
               }
           }
-
+      
           # Step output for downstream use
           echo "all_assignments=$(ConvertTo-Json $allAssignments -Depth 10 -Compress)" >> $env:GITHUB_OUTPUT
 
