@@ -1,7 +1,7 @@
 function Test-IntuneDeviceConfigurationPolicy {
     Param(
         [Parameter(Mandatory = $false)]
-        [string]$inputfilePath,
+        [string]$inputfilePath
         
     )
 
