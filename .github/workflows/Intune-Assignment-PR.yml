@@ -173,30 +173,30 @@ jobs:
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
       
           # Retrieve the paths of existing and new assignment files
-          $existingFile = '${{ steps.capture.outputs.existing_assignments_path }}'
-          $newFile = '${{ steps.create_new_json.outputs.new_assignments_path }}'
+          $existingFilePath = '${{ steps.capture.outputs.existing_assignments_path }}'
+          $newFilePath = '${{ steps.create_new_json.outputs.new_assignments_path }}'
       
-          # Ensure that we get the full file paths (use Get-Item)
-          $existingFilePath = Get-Item $existingFile
-          $newFilePath = Get-Item $newFile
+          # Get the actual JSON files from the directories
+          $existingFile = Get-ChildItem -Path $existingFilePath -Filter *.json | Select-Object -First 1
+          $newFile = Get-ChildItem -Path $newFilePath -Filter *.json | Select-Object -First 1
       
-          Write-Host "Existing Assignment File Path: $($existingFilePath.FullName)"
-          Write-Host "New Assignment File Path: $($newFilePath.FullName)"
+          Write-Host "Existing Assignment File: $($existingFile.FullName)"
+          Write-Host "New Assignment File: $($newFile.FullName)"
       
           # Validate that the paths point to valid files
-          if (-not (Test-Path $existingFilePath)) {
-              Write-Error "Existing assignment JSON file not found at $($existingFilePath.FullName)"
+          if (-not (Test-Path $existingFile.FullName)) {
+              Write-Error "Existing assignment JSON file not found at $($existingFile.FullName)"
               exit 1
           }
       
-          if (-not (Test-Path $newFilePath)) {
-              Write-Error "New assignment JSON file not found at $($newFilePath.FullName)"
+          if (-not (Test-Path $newFile.FullName)) {
+              Write-Error "New assignment JSON file not found at $($newFile.FullName)"
               exit 1
           }
       
           # Merging the files
           Write-Host "Merging existing and new assignments for PolicyId"
-          Merge-IntuneAssignmentJson -originalassignmentFile $existingFilePath.FullName -additionalassignmentFile $newFilePath.FullName -OutputFile "${{ env.MERGED_FILE }}"
+          Merge-IntuneAssignmentJson -originalassignmentFile $existingFile.FullName -additionalassignmentFile $newFile.FullName -OutputFile "${{ env.MERGED_FILE }}"
       
           # Output the path of merged file for next steps
           echo "merged_assignments_path=${{ env.MERGED_FILE }}" >> $env:GITHUB_OUTPUT
