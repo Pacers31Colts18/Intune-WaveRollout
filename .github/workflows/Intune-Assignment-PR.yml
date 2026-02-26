@@ -163,30 +163,31 @@ jobs:
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
-          # Get existing exported JSON files    
+      
+          # Get existing exported JSON files
           $existingFiles = Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter *.json
-
+      
           # Get new JSON files
           $newFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
-
+      
           if ($newFiles.Count -eq 0) {
               Write-Error "No new assignment JSON files found."
               exit 1
           }
-
+      
           foreach ($newFile in $newFiles) {
               # Extract PolicyId from new file
               $newJson = Get-Content $newFile.FullName -Raw | ConvertFrom-Json
               $policyId = @($newJson.value | Select-Object -ExpandProperty sourceId -Unique)[0]
-
-              # Find matching existing file
+      
+              # Check for existing file with matching PolicyId
               $existingFile = $existingFiles | Where-Object {
-                  (Get-Content $_.FullName -Raw | ConvertFrom-Json).value.sourceId -contains $policyId
+                  $existingJson = Get-Content $_.FullName -Raw | ConvertFrom-Json
+                  $existingJson.value.sourceId -eq $policyId
               }
-
+      
               $outputFile = "${{ env.MERGED_FILE }}"
-
+      
               if ($existingFile) {
                   Write-Host "Merging existing and new assignments for PolicyId $policyId"
                   Merge-IntuneAssignmentJson -originalassignmentFile $existingFile.FullName -additionalassignmentFile $newFile.FullName -OutputFile $outputFile
@@ -195,7 +196,7 @@ jobs:
                   Write-Host "No existing assignments found for PolicyId $policyId. Using new file only."
               }
           }
-
+      
           echo "merged_assignments_path=${{ env.MERGED_FILE }}" >> $env:GITHUB_OUTPUT
 
       # -------------------------------
