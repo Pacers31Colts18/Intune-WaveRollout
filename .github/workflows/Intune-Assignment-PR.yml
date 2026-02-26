@@ -154,7 +154,7 @@ jobs:
 
               foreach ($a in $assignment.Assignments) {
                   Write-Host "Assigning Group: $($a.GroupName), Type: $($a.AssignmentType), Filter: $($a.FilterName), FilterMode: $($a.FilterMode)"
-                  Set-IntuneDeviceConfigurationPolicyAssignment -PolicyId $assignment.PolicyId -Assignments @($a) -Mode Merge
+                  Set-IntuneDeviceConfigurationPolicyAssignment -inputfilePath "${{ env.MERGED_FILE }}"
               }
           }
 
