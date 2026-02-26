@@ -50,7 +50,7 @@ jobs:
         shell: pwsh
         run: |
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
-          Connect-MgGraph -AccessToken (ConvertTo-SecureString ((az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken) -AsPlainText -Force)
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
           $jsonFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
@@ -100,7 +100,7 @@ jobs:
         shell: pwsh
         run: |
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
-          Connect-MgGraph -AccessToken (ConvertTo-SecureString ((az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken) -AsPlainText -Force)
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
           
           # Load existing assignments
@@ -125,7 +125,7 @@ jobs:
         shell: pwsh
         run: |
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
-          Connect-MgGraph -AccessToken (ConvertTo-SecureString ((az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken) -AsPlainText -Force)
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
           
           $allAssignments = Get-Content '${{ env.MERGED_FILE }}' -Raw | ConvertFrom-Json
