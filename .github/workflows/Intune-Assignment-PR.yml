@@ -67,14 +67,13 @@ jobs:
 
           foreach ($file in $jsonFiles) {
               $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
-              $policyId = $json.PolicyId
-              Write-Host "Fetching current assignments for PolicyId: $policyId"
+              Write-Host "Fetching current assignments for PolicyId: $($json.id)"
 
               # Export assignments to JSON
-              $currentJson = Export-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId -outputFolder "${{ env.EXPORT_FOLDER }}"
+              $currentJson = Export-IntuneDeviceConfigurationPolicyAssignments -policyId $($json.id) -outputFolder "${{ env.EXPORT_FOLDER }}"
 
               $allAssignments += [PSCustomObject]@{
-                  PolicyId    = $policyId
+                  PolicyId    = $($json.id)
                   Assignments = ($currentJson | ConvertFrom-Json -depth 10)
               }
           }
