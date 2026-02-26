@@ -150,18 +150,23 @@ jobs:
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-          
-          $allAssignments = Get-Content '${{ env.MERGED_FILE }}' -Raw | ConvertFrom-Json
-          Set-IntuneDeviceConfigurationPolicyAssignment -inputfilePath "${{ env.MERGED_FILE }}: -policyid 
-          foreach ($assignment in $allAssignments) {
-              Write-Host "Applying assignments for PolicyId: $($assignment.PolicyId)"
-
-              foreach ($a in $assignment.Assignments) {
-                  Write-Host "Assigning Group: $($a.GroupName), Type: $($a.AssignmentType), Filter: $($a.FilterName), FilterMode: $($a.FilterMode)"
-                  Set-IntuneDeviceConfigurationPolicyAssignment -inputfilePath "${{ env.MERGED_FILE }}"
-              }
+      
+          # Detect the JSON file in the folder (assuming only one exists)
+          $assignmentFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
+      
+          if ($assignmentFiles.Count -eq 0) {
+              Write-Error "No assignment JSON files found in $($env:ASSIGNMENT_FOLDER)"
+              exit 1
           }
-
+          elseif ($assignmentFiles.Count -gt 1) {
+              Write-Warning "More than one JSON file found. Using the first one: $($assignmentFiles[0].FullName)"
+          }
+      
+          $assignmentFile = $assignmentFiles[0].FullName
+          Write-Host "Applying assignments from $assignmentFile"
+      
+          # Apply the assignments
+          Set-IntuneDeviceConfigurationPolicyAssignment -InputFilePath $assignmentFile
           Write-Host "All assignments applied successfully."
 
       # -------------------------------
