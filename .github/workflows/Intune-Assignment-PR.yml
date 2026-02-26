@@ -164,39 +164,25 @@ jobs:
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
       
-          # Get existing exported JSON files from EXPORT_FOLDER    
-          $existingFiles = Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter *.json
-      
-          # Get new JSON files from ASSIGNMENT_FOLDER (this can still be used for new assignment files)
-          $newFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
-      
-          if ($newFiles.Count -eq 0) {
+          # Get the file names from EXPORT_FOLDER (existing and new assignment JSON files)
+          $existingFile = Get-Item -Path "${{ env.EXPORT_FOLDER }}/*existing-assignments*.json"
+          $newFile = Get-Item -Path "${{ env.EXPORT_FOLDER }}/*new-assignments*.json"
+
+          # Ensure both files exist before merging
+          if (-not $existingFile) {
+              Write-Error "No existing assignment JSON files found."
+              exit 1
+          }
+
+          if (-not $newFile) {
               Write-Error "No new assignment JSON files found."
               exit 1
           }
-      
-          foreach ($newFile in $newFiles) {
-      
-              # Extract PolicyId from new file
-              $newJson = Get-Content $newFile.FullName -Raw | ConvertFrom-Json
-              $policyId = @($newJson.value | Select-Object -ExpandProperty sourceId -Unique)[0]
-      
-              # Find matching existing file from EXPORT_FOLDER
-              $existingFile = $existingFiles | Where-Object {
-                  (Get-Content $_.FullName -Raw | ConvertFrom-Json).value.sourceId -contains $policyId
-              }
-      
-              $outputFile = "${{ env.MERGED_FILE }}"
-      
-              if ($existingFile) {
-                  Write-Host "Merging existing and new assignments for PolicyId $policyId"
-                  Merge-IntuneAssignmentJson -originalassignmentFile $existingFile.FullName -additionalassignmentFile $newFile.FullName -OutputFile $outputFile
-              }
-              else {
-                  Write-Host "No existing assignments found for PolicyId $policyId. Using new file only."
-              }
-          }
-      
+
+          # Merging the files
+          Write-Host "Merging existing and new assignments for PolicyId"
+          Merge-IntuneAssignmentJson -originalassignmentFile $existingFile.FullName -additionalassignmentFile $newFile.FullName -OutputFile "${{ env.MERGED_FILE }}"
+
           echo "merged_assignments_path=${{ env.MERGED_FILE }}" >> $env:GITHUB_OUTPUT
 
       # -------------------------------
