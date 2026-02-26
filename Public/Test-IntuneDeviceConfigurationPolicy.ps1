@@ -1,7 +1,8 @@
 function Test-IntuneDeviceConfigurationPolicy {
     Param(
         [Parameter(Mandatory = $false)]
-        [string]$filePath
+        [string]$inputfilePath,
+        
     )
 
     # Microsoft Graph Connection check

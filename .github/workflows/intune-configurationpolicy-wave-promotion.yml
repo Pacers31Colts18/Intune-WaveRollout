@@ -1,8 +1,8 @@
-name: Intune Policy Import & Assignment
+name: Intune Policy Pipeline
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [labeled]
 
 permissions:
   id-token: write
@@ -15,19 +15,50 @@ env:
   CSV_PATH: ${{ github.workspace }}/staging/staging.csv
 
 jobs:
-
-  #Import Policies
+  # IMPORT POLICIES
   import:
+    if: github.event.label.name == 'import-policy'
     runs-on: ubuntu-latest
     environment: GraphApi
-    outputs:
-      imported_policies: ${{ steps.import_step.outputs.imported_policies }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Install Graph Modules
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
+
+      - name: Import Policies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
+
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+
+          Write-Host "Importing policies from ${{ env.STAGING_FOLDER }}"
+          Import-IntuneSettingsCatalogPolicy -folderPath "${{ env.STAGING_FOLDER }}"
+          Write-Host "Import complete."
+
+  #Capture Current Assignments
+  capture:
+    needs: import
+    runs-on: ubuntu-latest
+    environment: GraphApi
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Azure Login
         uses: azure/login@v2
@@ -42,41 +73,17 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      - name: Import Policies from Staging Folder
-        id: import_step
+      - name: Capture Current Assignments
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
 
-          # Acquire token
-          $tokenResponse = az account get-access-token --resource https://graph.microsoft.com
-          $token = ($tokenResponse | ConvertFrom-Json).accessToken
-          $secureToken = ConvertTo-SecureString $token -AsPlainText -Force
-          Connect-MgGraph -AccessToken $secureToken
-
-          # Load module
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-          Write-Host "Running import on folder: ${{ env.STAGING_FOLDER }}"
-          
-          # CALL FUNCTION ONCE
-          $results = Import-IntuneSettingsCatalogPolicy -folderPath "${{ env.STAGING_FOLDER }}"
 
-          if (-not $results) {
-              Write-Error "Import function returned nothing."
-          }
+          $current = Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId
+          return $current
 
-          $policyMap = @{}
-
-          foreach ($policy in $results) {
-              $policyMap[$policy.Name] = $policy.Id
-          }
-          
-          $allIds = ($policyMap.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ';'
-          
-          echo "imported_policies=$allIds" >> $env:GITHUB_OUTPUT
-
-          Write-Host "Import job complete."
-  
 
   # =============================
   # ASSIGN POLICIES (AFTER IMPORT)
