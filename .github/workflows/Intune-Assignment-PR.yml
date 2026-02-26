@@ -117,54 +117,31 @@ jobs:
           path: ${{ env.EXPORT_FOLDER }}
 
       # -------------------------------
-      # Step 3: Validate and Merge Assignments (all Merge)
-      # -------------------------------
-      - name: Validate and Merge Assignments
-        id: validate
+      # Step 3: Create new assignments based off CSV
+      # -------------------------------    
+      - name: Create New Assignments Based off CSV
+        id: create_new_json
         shell: pwsh
         run: |
-          # Authentication with Azure
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-      
-          # Debugging: Log the contents of the folder to ensure we have the files
-          $newFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
-      
-          # Log the files found in the folder
-          Write-Host "Files found in ${env.ASSIGNMENT_FOLDER}:"
-          $newFiles | ForEach-Object { Write-Host $_.FullName }
-      
+
+          # Get CSV Files
+          $newFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.csv
           if ($newFiles.Count -eq 0) {
-              Write-Error "No new assignment JSON files found in $($env:ASSIGNMENT_FOLDER)."
+              Write-Error "No new assignment CSV files found."
               exit 1
           }
-      
-          # Now process the files
-          foreach ($newFile in $newFiles) {
-              # Read new JSON file and extract sourceId
-              $newJson = Get-Content $newFile.FullName -Raw | ConvertFrom-Json
-              $policyId = $newJson.value.sourceId
-              Write-Host "Extracted sourceId from new file: $policyId"
-      
-              # Look for a matching existing file with the same sourceId
-              $existingFile = $existingFiles | Where-Object {
-                  $existingJson = Get-Content $_.FullName -Raw | ConvertFrom-Json
-                  $existingJson.value.sourceId -eq $policyId
-              }
-      
-              if ($existingFile) {
-                  Write-Host "Found matching existing file for PolicyId: $policyId"
-                  # Perform the merge operation
-                  $outputFile = "${{ env.MERGED_FILE }}"
-                  Merge-IntuneAssignmentJson -originalassignmentFile $existingFile.FullName -additionalassignmentFile $newFile.FullName -OutputFile $outputFile
-              }
-              else {
-                  Write-Host "No existing assignments found for PolicyId $policyId. Using new file only."
-              }
+
+          foreach ($file in $newFiles) {
+              Write-Host "Creating new assignment JSON from CSV: $($file.Name)"
+
+              # Pass file path to the function
+              New-IntuneAssignmentJson -InputFilePath $file.FullName -OutputFilePath "${{ env.EXPORT_FOLDER }}\new_$($file.BaseName).json"
           }
-      
-          echo "merged_assignments_path=${{ env.MERGED_FILE }}" >> $env:GITHUB_OUTPUT
+
+          echo "new_assignments_path=${{ env.EXPORT_FOLDER }}" >> $env:GITHUB_OUTPUT
 
       # -------------------------------
       # Step 4: Upload new assignments artifact
