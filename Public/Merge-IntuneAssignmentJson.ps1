@@ -36,8 +36,8 @@ function Merge-IntuneAssignmentJson {
 
     # Use context from first file
     $finalObject = [PSCustomObject]@{
-        "@odata.context" = $data1.'@odata.context'
         value            = $mergedAssignments
+        "@odata.context" = $data1.'@odata.context'
     }
 
     # Convert and save
