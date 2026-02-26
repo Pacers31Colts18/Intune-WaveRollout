@@ -160,36 +160,40 @@ jobs:
         id: validate
         shell: pwsh
         run: |
+          # Authentication with Azure
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
       
-          # Get existing exported JSON files
-          $existingFiles = Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter *.json
-      
-          # Get new JSON files
+          # Debugging: Log the contents of the folder to ensure we have the files
           $newFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
       
+          # Log the files found in the folder
+          Write-Host "Files found in ${env.ASSIGNMENT_FOLDER}:"
+          $newFiles | ForEach-Object { Write-Host $_.FullName }
+      
           if ($newFiles.Count -eq 0) {
-              Write-Error "No new assignment JSON files found."
+              Write-Error "No new assignment JSON files found in $($env:ASSIGNMENT_FOLDER)."
               exit 1
           }
       
+          # Now process the files
           foreach ($newFile in $newFiles) {
-              # Extract PolicyId from new file
+              # Read new JSON file and extract sourceId
               $newJson = Get-Content $newFile.FullName -Raw | ConvertFrom-Json
-              $policyId = @($newJson.value | Select-Object -ExpandProperty sourceId -Unique)[0]
+              $policyId = $newJson.value.sourceId
+              Write-Host "Extracted sourceId from new file: $policyId"
       
-              # Check for existing file with matching PolicyId
+              # Look for a matching existing file with the same sourceId
               $existingFile = $existingFiles | Where-Object {
                   $existingJson = Get-Content $_.FullName -Raw | ConvertFrom-Json
                   $existingJson.value.sourceId -eq $policyId
               }
       
-              $outputFile = "${{ env.MERGED_FILE }}"
-      
               if ($existingFile) {
-                  Write-Host "Merging existing and new assignments for PolicyId $policyId"
+                  Write-Host "Found matching existing file for PolicyId: $policyId"
+                  # Perform the merge operation
+                  $outputFile = "${{ env.MERGED_FILE }}"
                   Merge-IntuneAssignmentJson -originalassignmentFile $existingFile.FullName -additionalassignmentFile $newFile.FullName -OutputFile $outputFile
               }
               else {
