@@ -1,22 +1,36 @@
 function New-IntuneAssignmentJson {
+
     [CmdletBinding()]
     Param(
         [Parameter(Mandatory = $true)]
-        [string]$PolicyId,
+        [string]$InputFilePath,
         [Parameter(Mandatory = $true)]
-        [string]$CsvPath,
-        [Parameter(Mandatory = $true)]
-        [string]$OutputFile
+        [string]$OutputFilePath
     )
 
-    if (-not (Test-Path $CsvPath)) { 
-        throw "CSV file not found at $CsvPath" 
+    if (-not (Test-Path $InputFilePath)) { 
+        throw "CSV file not found at $InputFilePath" 
     }
 
-    $rows = Import-Csv -Path $CsvPath
+    $rows = Import-Csv -Path $InputFilePath
     if (-not $rows) { 
-        throw "CSV file contains no rows." 
+        Write-Error "CSV file contains no rows." 
+        break
     }
+
+    # Validate PolicyId exists in CSV
+    if (-not $rows[0].PolicyId) {
+        Write-Error "CSV must contain a PolicyId column."
+        break
+    }
+
+    $PolicyId = ($rows | Select-Object -ExpandProperty PolicyId -Unique)
+
+    if (@($PolicyId).Count -gt 1) {
+        throw "CSV contains multiple PolicyIds. Only one PolicyId per file is supported."
+    }
+
+    $PolicyId = $policyIds[0]
 
     $assignments = @()
 
@@ -27,8 +41,8 @@ function New-IntuneAssignmentJson {
         }
 
         $isAllDevices = $row.GroupId -eq "adadadad-808e-44e2-905a-0b7873a8a531"
-        $isAllUsers   = $row.GroupId -eq "allusers"
-        $isExclusion  = $row.Exclusion -eq "Yes"
+        $isAllUsers = $row.GroupId -eq "allusers"
+        $isExclusion = $row.Exclusion -eq "Yes"
 
         if ($isExclusion -and ($isAllDevices -or $isAllUsers)) {
             throw "Exclusions cannot be applied to All Devices or All Users."
@@ -48,11 +62,11 @@ function New-IntuneAssignmentJson {
         }
 
         # Filters allowed for everything except exclusions
-        $filterId   = $null
+        $filterId = $null
         $filterType = "none"
 
         if (-not $isExclusion) {
-            if ($row.FilterId)   { $filterId   = $row.FilterId }
+            if ($row.FilterId) { $filterId = $row.FilterId }
             if ($row.FilterType) { $filterType = $row.FilterType }
         }
 
@@ -61,10 +75,11 @@ function New-IntuneAssignmentJson {
             id       = "$PolicyId`_$($row.GroupId)"
             sourceId = $PolicyId
             target   = [PSCustomObject]@{
-                "@odata.type" = $odataType
-                groupId = if ($isAllDevices -or $isAllUsers) { 
+                "@odata.type"                              = $odataType
+                groupId                                    = if ($isAllDevices -or $isAllUsers) { 
                     $null 
-                } else { 
+                }
+                else { 
                     $row.GroupId 
                 }
                 deviceAndAppManagementAssignmentFilterId   = $filterId
@@ -74,20 +89,19 @@ function New-IntuneAssignmentJson {
     }
 
     $jsonOutput = [PSCustomObject]@{
-       "@odata.context" = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies('$PolicyId')/assignments"
-        value = $assignments
+        "@odata.context" = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies('$PolicyId')/assignments"
+        value            = $assignments
     } | ConvertTo-Json -Depth 10
 
     # Ensure directory exists
-    $directory = Split-Path $OutputFile -Parent
+    $directory = Split-Path $OutputFilePath -Parent
     if (-not (Test-Path $directory)) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
 
-    # Write file ONCE
-    $jsonOutput | Set-Content -Path $OutputFile -Encoding UTF8 -Force
+    $jsonOutput | Set-Content -Path $OutputFilePath -Encoding UTF8 -Force
 
-    Write-Host "Assignment JSON created at $OutputFile"
+    Write-Host "Assignment JSON created at $OutputFilePath"
 
     return $jsonOutput
 }
