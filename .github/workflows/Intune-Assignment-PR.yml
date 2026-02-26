@@ -154,7 +154,7 @@ jobs:
           path: ${{ env.EXPORT_FOLDER }}
 
       # -------------------------------
-      # Step 3: Validate and Merge Assignments (all Merge)
+      # Step 5: Validate and Merge Assignments (all Merge)
       # -------------------------------
       - name: Validate and Merge Assignments
         id: validate
