@@ -1,4 +1,4 @@
-Function Import-IntuneSettingsCatalogPolicy {
+Function Import-IntuneDeviceConfigurationPolicy {
 
     [CmdletBinding()]
     param
