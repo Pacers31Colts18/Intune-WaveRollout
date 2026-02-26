@@ -221,34 +221,16 @@ jobs:
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-          # Detect the JSON file in the folder (assuming only one exists)
-          $assignmentFiles = Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter *.json
+          # Use the merged assignments path directly
+          $assignmentFile = "${{ env.MERGED_FILE }}"
 
-          if ($assignmentFiles.Count -eq 0) {
-              Write-Error "No assignment JSON files found in $($env:ASSIGNMENT_FOLDER)"
+          if (-not (Test-Path $assignmentFile)) {
+              Write-Error "Merged assignment JSON file not found at $assignmentFile"
               exit 1
           }
-          elseif ($assignmentFiles.Count -gt 1) {
-              Write-Warning "More than one JSON file found. Using the first one: $($assignmentFiles[0].FullName)"
-          }
 
-          $assignmentFile = $assignmentFiles[0].FullName
           Write-Host "Applying assignments from $assignmentFile"
 
-          # Apply the assignments
+          # Apply the assignments from the merged file
           Set-IntuneDeviceConfigurationPolicyAssignment -InputFilePath $assignmentFile
           Write-Host "All assignments applied successfully."
-
-      # -------------------------------
-      # Step 8: Set PR Status
-      # -------------------------------
-      - name: Set PR Status
-        shell: pwsh
-        run: |
-          $SHA = "${GITHUB_SHA}"
-          gh api repos/${{ github.repository }}/statuses/$SHA `
-            -f state=success `
-            -f context="Assignment-Gate" `
-            -f description="Assignment validation and application completed successfully."
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
