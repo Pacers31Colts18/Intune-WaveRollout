@@ -49,6 +49,7 @@ jobs:
         id: capture
         shell: pwsh
         run: |
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString ((az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken) -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
@@ -74,7 +75,7 @@ jobs:
 
               $allAssignments += [PSCustomObject]@{
                   PolicyId    = $policyId
-                  Assignments = ($currentJson | ConvertFrom-Json)
+                  Assignments = ($currentJson | ConvertFrom-Json -depth 10)
               }
           }
 
@@ -98,8 +99,10 @@ jobs:
         id: validate
         shell: pwsh
         run: |
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString ((az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken) -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
+          
           # Load existing assignments
           $existingAssignments = '${{ steps.capture.outputs.all_assignments }}' | ConvertFrom-Json
 
@@ -121,8 +124,10 @@ jobs:
       - name: Apply Assignments
         shell: pwsh
         run: |
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString ((az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken) -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
+          
           $allAssignments = Get-Content '${{ env.MERGED_FILE }}' -Raw | ConvertFrom-Json
 
           foreach ($assignment in $allAssignments) {
