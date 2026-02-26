@@ -118,7 +118,7 @@ jobs:
               foreach ($file in $csvFile) {
               Write-Host "Creating new assignment JSON from CSV"
               New-IntuneAssignmentJson -inputfilePath $file -outputfilePath "${{ env.EXPORT_FOLDER }}\new_$($csvfile.policyId).json"
-
+              }
               echo "new_assignments_path=${{ env.EXPORT_FOLDER }}" >> $env:GITHUB_OUTPUT
           
       # -------------------------------
