@@ -13,9 +13,9 @@ permissions:
 env:
   REPO_DIR: ${{ github.workspace }}
   ASSIGNMENT_FOLDER: ${{ github.workspace }}/staging/assignments
-  ARTIFACT_NAME: existing-assignments
-  EXPORT_FOLDER: ${{ github.workspace }}/staging/existing-assignments
-  MERGED_FILE: ${{ github.workspace }}/staging/merged-assignments.json
+  ARTIFACT_NAME: artifacts
+  EXPORT_FOLDER: ${{ github.workspace }}/staging/assignments/artifacts
+  MERGED_FILE: ${{ github.workspace }}/staging/assignments/merged-assignments.json
 
 jobs:
   validate_and_apply_assignments:
