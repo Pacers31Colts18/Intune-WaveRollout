@@ -12,7 +12,7 @@
 RootModule = 'Intune-WaveRollout.psm1'
 
 # Version number of this module.
-ModuleVersion = '1.0.0'
+ModuleVersion = '1.1.0'
 
 # Supported PSEditions
 # CompatiblePSEditions = @()
@@ -70,9 +70,11 @@ RequiredModules = ''
 
 # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
 FunctionsToExport = @(
-    'Test-IntuneDeviceConfigurationPolicy',
+    'Export-IntuneDeviceConfigurationPolicyAssignments',
     'Import-IntuneSettingsCatalogPolicy',
-    'Export-IntuneDeviceConfigurationPolicyAssignments'
+    'Merge-IntuneAssignmentJson',
+    'New-IntuneAssignmentJson',
+    'Test-IntuneDeviceConfigurationPolicy'
 )
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
