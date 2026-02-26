@@ -52,27 +52,27 @@ jobs:
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-      
+
           # Get CSV Files for PolicyIds
           $csvFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.csv
           if ($csvFiles.Count -eq 0) {
               Write-Error "No CSV files found in $($env:ASSIGNMENT_FOLDER)"
               exit 1
           }
-      
+
           if (-not (Test-Path "${{ env.EXPORT_FOLDER }}")) {
               New-Item -Path "${{ env.EXPORT_FOLDER }}" -ItemType Directory -Force | Out-Null
           }
-      
+
           $allAssignments = @()
-      
+
           # Initialize a set to track processed PolicyIds
           $processedPolicyIds = @{}
-      
+
           # Loop over CSV files
           foreach ($file in $csvFiles) {
               $csvData = Import-Csv -Path $file.FullName
-      
+
               # Loop over each row in the CSV
               foreach ($row in $csvData) {
                   $policyId = $row.PolicyId
@@ -80,21 +80,21 @@ jobs:
                       Write-Warning "PolicyId is missing in the row, skipping..."
                       continue
                   }
-      
+
                   # Check if this PolicyId has already been processed
                   if ($processedPolicyIds.Contains($policyId)) {
                       Write-Host "PolicyId $policyId has already been processed, skipping..."
                       continue
                   }
-      
+
                   # Mark the PolicyId as processed
                   $processedPolicyIds[$policyId] = $true
-      
+
                   Write-Host "Fetching current assignments for PolicyId: $policyId"
-      
+
                   # Export assignments to JSON based on PolicyId
                   $currentJson = Export-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId -outputFolder "${{ env.EXPORT_FOLDER }}"
-      
+
                   # Store assignments for this PolicyId
                   $allAssignments += [PSCustomObject]@{
                       PolicyId    = $policyId
@@ -102,7 +102,7 @@ jobs:
                   }
               }
           }
-      
+
           # Step output for downstream use
           echo "all_assignments=$(ConvertTo-Json $allAssignments -Depth 10 -Compress)" >> $env:GITHUB_OUTPUT
 
@@ -113,7 +113,7 @@ jobs:
         if: ${{ steps.capture.outputs.all_assignments != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ARTIFACT_NAME }}
+          name: existing-assignments
           path: ${{ env.EXPORT_FOLDER }}
 
       # -------------------------------
@@ -126,25 +126,35 @@ jobs:
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-      
+
           # Get CSV Files
           $newFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.csv
           if ($newFiles.Count -eq 0) {
               Write-Error "No new assignment CSV files found."
               exit 1
           }
-      
+
           foreach ($file in $newFiles) {
               Write-Host "Creating new assignment JSON from CSV: $($file.Name)"
-      
+
               # Pass file path to the function
               New-IntuneAssignmentJson -InputFilePath $file.FullName -OutputFilePath "${{ env.EXPORT_FOLDER }}\new_$($file.BaseName).json"
           }
-      
+
           echo "new_assignments_path=${{ env.EXPORT_FOLDER }}" >> $env:GITHUB_OUTPUT
-          
+
       # -------------------------------
-      # Step 3: Validate and Merge Assignments (all Merge)
+      # Step 4: Upload new assignments artifact
+      # -------------------------------    
+      - name: Upload new assignments artifact
+        if: ${{ steps.create_new_json.outputs.new_assignments_path != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-assignments
+          path: ${{ env.EXPORT_FOLDER }}
+
+      # -------------------------------
+      # Step 5: Validate and Merge Assignments (all Merge)
       # -------------------------------
       - name: Validate and Merge Assignments
         id: validate
@@ -153,44 +163,53 @@ jobs:
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-          
-            # Get existing exported JSON files    
-            $existingFiles = Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter *.json
-        
-              # Get new JSON files
-              $newFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
-              
-              if ($newFiles.Count -eq 0) {
-                  Write-Error "No new assignment JSON files found."
-                  exit 1
-              }
-              
-              foreach ($newFile in $newFiles) {
-          
+
+          # Get existing exported JSON files    
+          $existingFiles = Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter *.json
+
+          # Get new JSON files
+          $newFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
+
+          if ($newFiles.Count -eq 0) {
+              Write-Error "No new assignment JSON files found."
+              exit 1
+          }
+
+          foreach ($newFile in $newFiles) {
               # Extract PolicyId from new file
               $newJson = Get-Content $newFile.FullName -Raw | ConvertFrom-Json
               $policyId = @($newJson.value | Select-Object -ExpandProperty sourceId -Unique)[0]
-          
+
               # Find matching existing file
               $existingFile = $existingFiles | Where-Object {
                   (Get-Content $_.FullName -Raw | ConvertFrom-Json).value.sourceId -contains $policyId
               }
-          
+
               $outputFile = "${{ env.MERGED_FILE }}"
-          
+
               if ($existingFile) {
                   Write-Host "Merging existing and new assignments for PolicyId $policyId"
                   Merge-IntuneAssignmentJson -originalassignmentFile $existingFile.FullName -additionalassignmentFile $newFile.FullName -OutputFile $outputFile
               }
               else {
                   Write-Host "No existing assignments found for PolicyId $policyId. Using new file only."
-                  }
+              }
           }
-          
+
           echo "merged_assignments_path=${{ env.MERGED_FILE }}" >> $env:GITHUB_OUTPUT
 
       # -------------------------------
-      # Step 4: Apply assignments
+      # Step 6: Upload merged assignments artifact
+      # -------------------------------
+      - name: Upload merged assignments artifact
+        if: ${{ steps.validate.outputs.merged_assignments_path != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-assignments
+          path: ${{ env.MERGED_FILE }}
+
+      # -------------------------------
+      # Step 7: Apply assignments
       # -------------------------------
       - name: Apply Assignments
         shell: pwsh
@@ -198,10 +217,10 @@ jobs:
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-      
+
           # Detect the JSON file in the folder (assuming only one exists)
-          $assignmentFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
-      
+          $assignmentFiles = Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter *.json
+
           if ($assignmentFiles.Count -eq 0) {
               Write-Error "No assignment JSON files found in $($env:ASSIGNMENT_FOLDER)"
               exit 1
@@ -209,16 +228,16 @@ jobs:
           elseif ($assignmentFiles.Count -gt 1) {
               Write-Warning "More than one JSON file found. Using the first one: $($assignmentFiles[0].FullName)"
           }
-      
+
           $assignmentFile = $assignmentFiles[0].FullName
           Write-Host "Applying assignments from $assignmentFile"
-      
+
           # Apply the assignments
           Set-IntuneDeviceConfigurationPolicyAssignment -InputFilePath $assignmentFile
           Write-Host "All assignments applied successfully."
 
       # -------------------------------
-      # Step 5: Set PR Status
+      # Step 8: Set PR Status
       # -------------------------------
       - name: Set PR Status
         shell: pwsh
