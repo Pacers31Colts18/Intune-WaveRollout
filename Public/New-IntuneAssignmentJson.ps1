@@ -8,46 +8,59 @@ function New-IntuneAssignmentJson {
         [string]$OutputFilePath
     )
 
+    # Validate CSV Exists
     if (-not (Test-Path $InputFilePath)) { 
-        throw "CSV file not found at $InputFilePath" 
+        Write-Error "CSV file not found at $InputFilePath" 
     }
 
     $rows = Import-Csv -Path $InputFilePath
+
     if (-not $rows) { 
-        Write-Error "CSV file contains no rows." 
-        break
+        Write-Error "CSV file contains no rows."
     }
 
-    # Validate PolicyId exists in CSV
+    # Validate Required Columns
     if (-not $rows[0].PolicyId) {
         Write-Error "CSV must contain a PolicyId column."
-        break
     }
 
-    $PolicyId = ($rows | Select-Object -ExpandProperty PolicyId -Unique)
-
-    if (@($PolicyId).Count -gt 1) {
-        throw "CSV contains multiple PolicyIds. Only one PolicyId per file is supported."
+    if (-not $rows[0].GroupId) {
+        Write-Error "CSV must contain a GroupId column."
     }
 
-    $PolicyId = $policyIds[0]
+    if (-not $rows[0].AssignmentType) {
+        Write-Error "CSV must contain an AssignmentType column (include/exclude)."
+    }
+
+    # Validate Single PolicyId
+    $policyIds = @($rows | Select-Object -ExpandProperty PolicyId -Unique)
+
+    if ($policyIds.Count -ne 1) {
+        throw "CSV must contain exactly ONE unique PolicyId."
+    }
+
+    $PolicyId = [string]$policyIds[0]
 
     $assignments = @()
 
     foreach ($row in $rows) {
 
-        if (-not $row.GroupId) { 
-            throw "GroupId is required for each row." 
+        $groupId = $row.GroupId.Trim()
+        $assignmentType = $row.AssignmentType.Trim().ToLower()
+
+        if ($assignmentType -notin @("include", "exclude")) {
+            throw "AssignmentType must be either 'include' or 'exclude'. Found: $assignmentType"
         }
 
-        $isAllDevices = $row.GroupId -eq "adadadad-808e-44e2-905a-0b7873a8a531"
-        $isAllUsers = $row.GroupId -eq "allusers"
-        $isExclusion = $row.Exclusion -eq "Yes"
+        $isAllDevices = $groupId -eq "adadadad-808e-44e2-905a-0b7873a8a531"
+        $isAllUsers = $groupId -eq "allusers"
+        $isExclusion = $assignmentType -eq "exclude"
 
         if ($isExclusion -and ($isAllDevices -or $isAllUsers)) {
             throw "Exclusions cannot be applied to All Devices or All Users."
         }
 
+        # Determine OData Type
         $odataType = if ($isAllDevices) {
             "#microsoft.graph.allDevicesAssignmentTarget"
         }
@@ -61,39 +74,36 @@ function New-IntuneAssignmentJson {
             "#microsoft.graph.groupAssignmentTarget"
         }
 
-        # Filters allowed for everything except exclusions
+        # Handle Filters
         $filterId = $null
         $filterType = "none"
 
         if (-not $isExclusion) {
-            if ($row.FilterId) { $filterId = $row.FilterId }
-            if ($row.FilterType) { $filterType = $row.FilterType }
+            if ($row.FilterId) { $filterId = $row.FilterId.Trim() }
+            if ($row.FilterType) { $filterType = $row.FilterType.Trim() }
         }
 
+        # Build Assignment Object
         $assignments += [PSCustomObject]@{
             source   = "direct"
-            id       = "$PolicyId`_$($row.GroupId)"
+            id       = "${PolicyId}_$groupId"
             sourceId = $PolicyId
             target   = [PSCustomObject]@{
                 "@odata.type"                              = $odataType
-                groupId                                    = if ($isAllDevices -or $isAllUsers) { 
-                    $null 
-                }
-                else { 
-                    $row.GroupId 
-                }
+                groupId                                    = if ($isAllDevices -or $isAllUsers) { $null } else { $groupId }
                 deviceAndAppManagementAssignmentFilterId   = $filterId
                 deviceAndAppManagementAssignmentFilterType = $filterType
             }
         }
     }
 
+    # Build Final JSON
     $jsonOutput = [PSCustomObject]@{
         "@odata.context" = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies('$PolicyId')/assignments"
         value            = $assignments
     } | ConvertTo-Json -Depth 10
 
-    # Ensure directory exists
+    # Ensure output directory exists
     $directory = Split-Path $OutputFilePath -Parent
     if (-not (Test-Path $directory)) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
