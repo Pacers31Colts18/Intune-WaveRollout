@@ -14,6 +14,8 @@ env:
   REPO_DIR: ${{ github.workspace }}
   ASSIGNMENT_FOLDER: ${{ github.workspace }}/staging/assignments
   ARTIFACT_NAME: existing-assignments
+  EXPORT_FOLDER: ${{ github.workspace }}/staging/existing-assignments
+  MERGED_FILE: ${{ github.workspace }}/staging/merged-assignments.json
 
 jobs:
   validate_and_apply_assignments:
@@ -21,6 +23,9 @@ jobs:
     environment: GraphApi
 
     steps:
+      # -------------------------------
+      # Checkout & Login
+      # -------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -44,8 +49,7 @@ jobs:
         id: capture
         shell: pwsh
         run: |
-          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
-          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString ((az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken) -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
           $jsonFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
@@ -54,82 +58,81 @@ jobs:
               exit 0
           }
 
+          if (-not (Test-Path "${{ env.EXPORT_FOLDER }}")) {
+              New-Item -Path "${{ env.EXPORT_FOLDER }}" -ItemType Directory -Force | Out-Null
+          }
+
           $allAssignments = @()
+
           foreach ($file in $jsonFiles) {
               $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
               $policyId = $json.PolicyId
               Write-Host "Fetching current assignments for PolicyId: $policyId"
 
-              $current = @( Get-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId )
-
-              if ($current.Count -eq 0) {
-                  Write-Host "No existing assignments found for PolicyId: $policyId"
-              }
-              else {
-                  Write-Host "Found $($current.Count) existing assignment(s) for PolicyId: $policyId"
-              }
+              # Export assignments to JSON
+              $currentJson = Export-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId -outputFolder "${{ env.EXPORT_FOLDER }}"
 
               $allAssignments += [PSCustomObject]@{
-                  PolicyId           = $policyId
-                  CurrentAssignments = $current
+                  PolicyId    = $policyId
+                  Assignments = ($currentJson | ConvertFrom-Json)
               }
           }
 
-          # Store JSON as step output
-          $jsonOutput = $allAssignments | ConvertTo-Json -Depth 10 -Compress
-          echo "all_assignments=$jsonOutput" >> $env:GITHUB_OUTPUT
+          # Step output for downstream use
+          echo "all_assignments=$(ConvertTo-Json $allAssignments -Depth 10 -Compress)" >> $env:GITHUB_OUTPUT
 
       # -------------------------------
       # Step 2: Upload artifact of existing assignments
       # -------------------------------
       - name: Upload existing assignments artifact
+        if: ${{ steps.capture.outputs.all_assignments != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
-          path: ${{ github.workspace }}/staging/assignments
+          path: ${{ env.EXPORT_FOLDER }}
 
       # -------------------------------
-      # Step 3: Validate JSON assignment files
+      # Step 3: Validate and Merge Assignments (all Merge)
       # -------------------------------
-      - name: Validate Assignment JSON
+      - name: Validate and Merge Assignments
         id: validate
         shell: pwsh
         run: |
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
+          # Load existing assignments
+          $existingAssignments = '${{ steps.capture.outputs.all_assignments }}' | ConvertFrom-Json
+
+          # Load new assignment JSONs
           $jsonFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.json
           if ($jsonFiles.Count -eq 0) {
               Write-Error "No assignment JSON files found in $($env:ASSIGNMENT_FOLDER)."
               exit 1
           }
 
-          $assignmentsList = @()
+          $mergedAssignments = @()
+
           foreach ($file in $jsonFiles) {
               $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
+              if (-not $json.PolicyId) { throw "PolicyId required in $($file.Name)" }
 
-              if (-not $json.PolicyId) {
-                  Write-Error "PolicyId is required in $($file.Name)."
-                  exit 1
+              # Merge: take existing assignments and add new ones
+              $current = $existingAssignments | Where-Object { $_.PolicyId -eq $json.PolicyId }
+              $currentAssignments = @()
+              if ($current) { $currentAssignments = $current.Assignments }
+
+              $finalAssignments = $currentAssignments + $json.Assignments
+
+              $mergedAssignments += [PSCustomObject]@{
+                  PolicyId    = $json.PolicyId
+                  Assignments = $finalAssignments
+                  AssignmentMode = "Merge"
               }
-
-              if (-not ($json.AssignmentMode -in @("Merge","Overwrite"))) {
-                  Write-Error "AssignmentMode must be 'Merge' or 'Overwrite' in $($file.Name)."
-                  exit 1
-              }
-
-              $uri = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$($json.PolicyId)"
-              $policy = Invoke-MgGraphRequest -Uri $uri -Method GET
-
-              if (-not $policy) {
-                  Write-Error "PolicyId $($json.PolicyId) not found in tenant."
-                  exit 1
-              }
-
-              Write-Host "Policy validated: $($policy.DisplayName) [$($policy.Id)]"
-              $assignmentsList += $json
           }
 
-          echo "validated_assignments=$(ConvertTo-Json $assignmentsList -Compress)" >> $GITHUB_OUTPUT
+          # Save merged assignments to file for traceability / artifact
+          $mergedAssignments | ConvertTo-Json -Depth 10 | Set-Content -Path "${{ env.MERGED_FILE }}" -Force
+          echo "merged_assignments_path=${{ env.MERGED_FILE }}" >> $GITHUB_OUTPUT
 
       # -------------------------------
       # Step 4: Apply assignments
@@ -139,18 +142,11 @@ jobs:
         run: |
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-          $allAssignments = '${{ steps.validate.outputs.validated_assignments }}' | ConvertFrom-Json
+          $allAssignments = Get-Content '${{ env.MERGED_FILE }}' -Raw | ConvertFrom-Json
 
           foreach ($assignment in $allAssignments) {
-              Write-Host "Applying assignments for PolicyId: $($assignment.PolicyId) with mode: $($assignment.AssignmentMode)"
+              Write-Host "Applying assignments for PolicyId: $($assignment.PolicyId)"
 
-              if ($assignment.AssignmentMode -eq "Overwrite") {
-                  # Remove existing assignments first
-                  Write-Host "Overwriting existing assignments..."
-                  Set-IntuneDeviceConfigurationPolicyAssignments -PolicyId $assignment.PolicyId -Assignments @() -Mode Overwrite
-              }
-
-              # Merge new assignments
               foreach ($a in $assignment.Assignments) {
                   Write-Host "Assigning Group: $($a.GroupName), Type: $($a.AssignmentType), Filter: $($a.FilterName), FilterMode: $($a.FilterMode)"
                   Set-IntuneDeviceConfigurationPolicyAssignments -PolicyId $assignment.PolicyId -Assignments @($a) -Mode Merge
