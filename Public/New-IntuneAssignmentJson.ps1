@@ -36,7 +36,7 @@ function New-IntuneAssignmentJson {
     $policyIds = @($rows | Select-Object -ExpandProperty PolicyId -Unique)
 
     if ($policyIds.Count -ne 1) {
-        throw "CSV must contain exactly ONE unique PolicyId."
+        Write-Error "CSV must contain only one PolicyId."
     }
 
     $PolicyId = [string]$policyIds[0]
@@ -49,7 +49,7 @@ function New-IntuneAssignmentJson {
         $assignmentType = $row.AssignmentType.Trim().ToLower()
 
         if ($assignmentType -notin @("include", "exclude")) {
-            throw "AssignmentType must be either 'include' or 'exclude'. Found: $assignmentType"
+            Write-Error "AssignmentType must be either 'include' or 'exclude'. Found: $assignmentType"
         }
 
         $isAllDevices = $groupId -eq "adadadad-808e-44e2-905a-0b7873a8a531"
@@ -57,7 +57,7 @@ function New-IntuneAssignmentJson {
         $isExclusion = $assignmentType -eq "exclude"
 
         if ($isExclusion -and ($isAllDevices -or $isAllUsers)) {
-            throw "Exclusions cannot be applied to All Devices or All Users."
+            Write-Error "Exclusions cannot be applied to All Devices or All Users."
         }
 
         # Determine OData Type
