@@ -1,4 +1,4 @@
-name: Intune-DeviceConfiguration-AssignmentCheck
+name: Intune-DeviceConfiguration-Assignment2
 
 on:
   pull_request:
