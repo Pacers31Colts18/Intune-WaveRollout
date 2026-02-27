@@ -143,7 +143,7 @@ jobs:
           }
 
           # Store the file path for later use
-          $newAssignmentFile = (Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter "new-assignments").FullName
+          $newAssignmentFile = (Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter "new-assignments.json").FullName
           echo "new_assignments_path=$newAssignmentFile" >> $env:GITHUB_OUTPUT
 
       # -------------------------------
