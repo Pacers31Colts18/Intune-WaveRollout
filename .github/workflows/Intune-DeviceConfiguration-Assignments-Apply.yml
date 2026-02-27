@@ -16,6 +16,7 @@ env:
   ASSIGNMENT_FOLDER: ${{ github.workspace }}/staging/deviceconfiguration/assignments
   ARTIFACT_NAME: artifacts
   EXPORT_FOLDER: ${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts
+  github-token: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   apply_assignments:
@@ -46,8 +47,6 @@ jobs:
         with:
           name: merged-assignments
           path: ${{ env.EXPORT_FOLDER }}
-          env:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # Step 2: Apply assignments
       - name: Apply Assignments
