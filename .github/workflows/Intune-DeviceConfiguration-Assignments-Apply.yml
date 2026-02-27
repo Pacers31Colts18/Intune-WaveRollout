@@ -40,35 +40,31 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      # -------------------------------
       # Step 1: Download the merged assignments artifact
-      # -------------------------------
       - name: Download merged assignments artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v2  # Switching to v2 to ensure compatibility
         with:
-          name: merged-assignments  # Name of the artifact from the first workflow
-          path: ${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts  # Path to download to
+          name: merged-assignments  # Same name as the artifact uploaded in the first workflow
+          path: ${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts  # Path where the artifact should be downloaded
 
-      # -------------------------------
-      # Step 2: Apply Assignments
-      # -------------------------------
+      # Step 2: Apply assignments
       - name: Apply Assignments
         shell: pwsh
         run: |
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
-          # Path to the merged assignments file (now downloaded)
+      
+          # Path to merged assignments file
           $mergedFilePath = "${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts/merged-assignments.json"
           Write-Host "Applying assignments from $mergedFilePath"
-
-          # Check if merged file exists before applying
+      
+          # Check if the merged file exists
           if (-not (Test-Path $mergedFilePath)) {
-              Write-Error "Merged assignment JSON file not found at $mergedFilePath"
-              exit 1
+            Write-Error "Merged assignment JSON file not found at $mergedFilePath"
+            exit 1
           }
-
+      
           # Apply the merged assignments
           Set-IntuneDeviceConfigurationPolicyAssignment -InputFilePath $mergedFilePath
           Write-Host "All assignments applied successfully."
