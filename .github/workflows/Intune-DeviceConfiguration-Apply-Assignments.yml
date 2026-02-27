@@ -1,0 +1,45 @@
+name: Intune-DeviceConfiguration-Assignments-Apply.yml
+
+on:
+  push:
+    branches:
+      - main  # Trigger when the PR is merged into `main`
+
+jobs:
+  apply_assignments:
+    runs-on: ubuntu-latest
+    environment: GraphApi
+
+    steps:
+      # Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Install Microsoft Graph Modules
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
+
+      # Step 5: Apply Assignments
+      - name: Apply Assignments
+        shell: pwsh
+        run: |
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+
+          # Path to the merged assignments file (generated in the previous workflow)
+          $mergedFilePath = "${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts/merged-assignments.json"
+          Write-Host "Applying assignments from $mergedFilePath"
+
+          # Apply the merged assignments
+          Set-IntuneDeviceConfigurationPolicyAssignment -InputFilePath $mergedFilePath
+          Write-Host "All assignments applied successfully."
