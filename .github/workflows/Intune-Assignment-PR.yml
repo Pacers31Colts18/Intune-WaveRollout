@@ -23,9 +23,7 @@ jobs:
     environment: GraphApi
 
     steps:
-      # -------------------------------
       # Checkout & Login
-      # -------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -42,9 +40,7 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      # -------------------------------
       # Step 1: Capture Existing Assignments
-      # -------------------------------
       - name: Capture Existing Assignments
         id: capture_existing_json
         shell: pwsh
@@ -107,9 +103,7 @@ jobs:
           $existingFile = (Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter "*_Assignments.json").FullName
           echo "existing_assignments_path=$existingFile" >> $env:GITHUB_OUTPUT
 
-      # -------------------------------
       # Step 2: Upload artifact of existing assignments
-      # -------------------------------
       - name: Upload existing assignments artifact
         if: ${{ steps.capture_existing_json.outputs.existing_assignments_path != '' }}
         uses: actions/upload-artifact@v4
@@ -117,10 +111,8 @@ jobs:
           name: existing-assignments
           path: ${{ env.EXPORT_FOLDER }}
 
-      # -------------------------------
-      # Step 3: Create new assignments based off CSV
-      # -------------------------------    
-      - name: Create New Assignments Based off CSV
+      # Step 3: Create new assignments based off csv
+      - name: Create new assignments based off csv
         id: create_new_json
         shell: pwsh
         run: |
@@ -146,9 +138,7 @@ jobs:
           $newAssignmentFile = (Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter "new-assignments.json").FullName
           echo "new_assignments_path=$newAssignmentFile" >> $env:GITHUB_OUTPUT
 
-      # -------------------------------
       # Step 4: Upload new assignments artifact
-      # -------------------------------    
       - name: Upload new assignments artifact
         if: ${{ steps.create_new_json.outputs.new_assignments_path != '' }}
         uses: actions/upload-artifact@v4
@@ -156,9 +146,7 @@ jobs:
           name: new-assignments
           path: ${{ env.EXPORT_FOLDER }}
 
-      # -------------------------------
-      # Step 5: Validate and Merge Assignments (all Merge)
-      # -------------------------------
+      # Step 5: Validate and Merge Assignments
       - name: Validate and Merge Assignments
         id: validate
         shell: pwsh
@@ -196,9 +184,7 @@ jobs:
           # Output the path of merged file for next steps
           echo "merged_assignments_path=${{ env.MERGED_FILE }}" >> $env:GITHUB_OUTPUT
 
-      # -------------------------------
       # Step 6: Upload merged assignments artifact
-      # -------------------------------
       - name: Upload merged assignments artifact
         if: ${{ steps.validate.outputs.merged_assignments_path != '' }}
         uses: actions/upload-artifact@v4
@@ -206,9 +192,7 @@ jobs:
           name: merged-assignments
           path: ${{ env.EXPORT_FOLDER }}
 
-      # -------------------------------
       # Step 7: Apply assignments
-      # -------------------------------
       - name: Apply Assignments
         shell: pwsh
         run: |
