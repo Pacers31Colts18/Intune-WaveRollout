@@ -14,7 +14,7 @@ env:
   REPO_DIR: ${{ github.workspace }}
   ASSIGNMENT_FOLDER: ${{ github.workspace }}/staging/deviceconfiguration/assignments
   ARTIFACT_NAME: artifacts
-  EXPORT_FOLDER: ${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts
+  EXPORT_FOLDER: ${{ github.workspace }}/staging/deviceconfiguration/assignments
 
 jobs:
   validate_and_create_assignments:
