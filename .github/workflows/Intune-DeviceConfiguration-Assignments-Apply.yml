@@ -16,7 +16,7 @@ env:
   REPO_DIR: ${{ github.workspace }}
   ASSIGNMENT_FOLDER: ${{ github.workspace }}/staging/deviceconfiguration/assignments
   ARTIFACT_NAME: artifacts
-  EXPORT_FOLDER: ${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts
+  EXPORT_FOLDER: ${{ github.workspace }}/staging/deviceconfiguration/assignments
   github-token: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
@@ -77,7 +77,7 @@ jobs:
       - name: Download merged assignments artifact
         uses: actions/download-artifact@v4
         with:
-          path: ${{ github.workspace }}/staging/deviceconfiguration/assignments
+          path: ${{ env.EXPORT_FOLDER }}
           run-id: ${{ github.event.workflow_run.id }}
 
       # ---------------------------------------------------------
@@ -90,13 +90,16 @@ jobs:
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
       
-          $mergedFilePath = "${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts/merged-assignments.json"
+          $mergedFilePath = "${{ env.EXPORT_FOLDER }}"
           Write-Host "Applying assignments from $mergedFilePath"
       
           if (-not (Test-Path $mergedFilePath)) {
             Write-Error "Merged assignment JSON file not found at $mergedFilePath"
             exit 1
           }
+          if (Test-Path $mergedFilePath) {
+            Get-ChildItem -filter *.json
+            }
       
-          Set-IntuneDeviceConfigurationPolicyAssignment -InputFilePath $mergedFilePath
+          Set-IntuneDeviceConfigurationPolicyAssignment -InputFilePath "${{ env.EXPORT_FOLDER }}\merged-assignments.json"
           Write-Host "All assignments applied successfully."
