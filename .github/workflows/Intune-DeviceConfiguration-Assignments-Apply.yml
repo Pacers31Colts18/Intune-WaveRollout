@@ -47,7 +47,7 @@ jobs:
           name: merged-assignments
           path: ${{ env.EXPORT_FOLDER }}
           env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Step 2: Apply assignments
       - name: Apply Assignments
