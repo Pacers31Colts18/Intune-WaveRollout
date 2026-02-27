@@ -1,8 +1,8 @@
-name: Intune - Apply Assignments
+name: Intune-DeviceConfiguration-Assignment-Apply
 
 on: 
   workflow_run: 
-    workflows: ["Intune - Merge Assignments"] 
+    workflows: ["Intune-DeviceConfiguration-Assignments-Validate"] 
     types: [completed] 
 
 permissions:
