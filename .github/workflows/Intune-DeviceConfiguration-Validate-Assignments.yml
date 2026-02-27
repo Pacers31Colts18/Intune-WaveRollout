@@ -1,13 +1,9 @@
-name: Intune-DeviceConfiguration-Assignment2
+name: Intune-DeviceConfiguration-Validate-Assignments
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]  # This triggers the workflow on PR creation and sync
-
-  push:
-    branches:
-      - main  # This triggers the workflow after the PR is merged into the main branch
-
+    types: [opened, synchronize, reopened]
+    
 permissions:
   pull-requests: write
   contents: read
@@ -19,15 +15,11 @@ env:
   ASSIGNMENT_FOLDER: ${{ github.workspace }}/staging/deviceconfiguration/assignments
   ARTIFACT_NAME: artifacts
   EXPORT_FOLDER: ${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts
-  MERGED_FILE: ${{ github.workspace }}/staging/deviceconfiguration/assignments/merged-assignments.json
 
 jobs:
-  # Job for validating, creating, and uploading on PR creation
   validate_and_create_assignments:
     runs-on: ubuntu-latest
     environment: GraphApi
-
-    if: github.event_name == 'pull_request'  # This job will run on PR events (on PR creation, synchronize, reopen)
 
     steps:
       # Checkout & Login
@@ -118,8 +110,8 @@ jobs:
           name: existing-assignments
           path: ${{ env.EXPORT_FOLDER }}
 
-      # Step 3: Create new assignments based off csv
-      - name: Create new assignments based off csv
+      # Step 3: Create new assignments based off CSV
+      - name: Create new assignments based off CSV
         id: create_new_json
         shell: pwsh
         run: |
@@ -152,48 +144,3 @@ jobs:
         with:
           name: new-assignments
           path: ${{ env.EXPORT_FOLDER }}
-
-  # Job for applying the assignments after PR is merged
-  apply_assignments:
-    runs-on: ubuntu-latest
-    needs: validate_and_create_assignments
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'  # This job will run after PR is merged to main branch
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          allow-no-subscriptions: true
-
-      - name: Install Microsoft Graph Modules
-        shell: pwsh
-        run: |
-          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
-          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
-
-      # Step 5: Apply assignments
-      - name: Apply Assignments
-        shell: pwsh
-        run: |
-          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
-          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
-          Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
-          # Use the merged assignments file
-          $mergedFilePath = "${{ env.EXPORT_FOLDER }}\merged-assignments.json"
-
-          if (-not (Test-Path $mergedFilePath)) {
-              Write-Error "Merged assignment JSON file not found at $mergedFilePath"
-              exit 1
-          }
-
-          Write-Host "Applying assignments from $mergedFilePath"
-
-          # Apply the merged assignments
-          Set-IntuneDeviceConfigurationPolicyAssignment -InputFilePath $mergedFilePath
-          Write-Host "All assignments applied successfully."
