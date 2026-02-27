@@ -1,9 +1,9 @@
 name: Intune - Apply Assignments
 
-on:
-  push:
-    branches:
-      - main
+on: 
+  workflow_run: 
+    workflows: ["Intune - Merge Assignments"] 
+    types: [completed] 
 
 permissions:
   pull-requests: write
@@ -48,8 +48,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: merged-assignments
-          path: ${{ env.EXPORT_FOLDER }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: staging/deviceconfiguration/assignments/artifacts 
+          run-id: ${{ github.event.workflow_run.id }}
 
       # Step 2: Apply assignments
       - name: Apply Assignments
