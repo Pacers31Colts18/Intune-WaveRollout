@@ -44,7 +44,7 @@ jobs:
       # Step 1: Download the merged assignments artifact
       # -------------------------------
       - name: Download merged assignments artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: merged-assignments  # Name of the artifact from the first workflow
           path: ${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts  # Path to download to
