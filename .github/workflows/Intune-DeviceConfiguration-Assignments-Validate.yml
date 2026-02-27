@@ -1,4 +1,4 @@
-name: Intune-DeviceConfiguration-Validate-Assignments
+name: Intune-DeviceConfiguration-Assignments-Validate
 
 on:
   pull_request:
