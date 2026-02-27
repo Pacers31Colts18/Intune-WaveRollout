@@ -1,10 +1,10 @@
-name: Intune-DeviceConfiguration-Assignments-Apply
+name: Intune - Apply Assignments
 
 on:
   push:
     branches:
       - main
-      
+
 permissions:
   pull-requests: write
   contents: read
@@ -40,7 +40,18 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      # Step 5: Apply Assignments
+      # -------------------------------
+      # Step 1: Download the merged assignments artifact
+      # -------------------------------
+      - name: Download merged assignments artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: merged-assignments  # Name of the artifact from the first workflow
+          path: ${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts  # Path to download to
+
+      # -------------------------------
+      # Step 2: Apply Assignments
+      # -------------------------------
       - name: Apply Assignments
         shell: pwsh
         run: |
@@ -48,9 +59,15 @@ jobs:
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
-          # Path to the merged assignments file (generated in the previous workflow)
+          # Path to the merged assignments file (now downloaded)
           $mergedFilePath = "${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts/merged-assignments.json"
           Write-Host "Applying assignments from $mergedFilePath"
+
+          # Check if merged file exists before applying
+          if (-not (Test-Path $mergedFilePath)) {
+              Write-Error "Merged assignment JSON file not found at $mergedFilePath"
+              exit 1
+          }
 
           # Apply the merged assignments
           Set-IntuneDeviceConfigurationPolicyAssignment -InputFilePath $mergedFilePath
