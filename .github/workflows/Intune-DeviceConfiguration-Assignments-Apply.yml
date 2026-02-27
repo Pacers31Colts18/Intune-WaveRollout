@@ -42,10 +42,10 @@ jobs:
 
       # Step 1: Download the merged assignments artifact
       - name: Download merged assignments artifact
-        uses: actions/download-artifact@v2  # Switching to v2 to ensure compatibility
+        uses: actions/download-artifact@v4
         with:
-          name: merged-assignments  # Same name as the artifact uploaded in the first workflow
-          path: ${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts  # Path where the artifact should be downloaded
+          name: merged-assignments
+          path: ${{ env.EXPORT_FOLDER }}
 
       # Step 2: Apply assignments
       - name: Apply Assignments
