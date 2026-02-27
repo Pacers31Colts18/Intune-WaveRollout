@@ -168,7 +168,7 @@ jobs:
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
       
           # Retrieve the paths of existing and new assignment files
-          $existingFilePath = '${{ steps.capture.outputs.existing_assignments_path }}'
+          $existingFilePath = '${{ steps.capture_existing_json.outputs.existing_assignments_path }}'
           $newFilePath = '${{ steps.create_new_json.outputs.new_assignments_path }}'
       
           # Get the actual JSON files from the directories
