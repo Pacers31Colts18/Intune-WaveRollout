@@ -77,7 +77,6 @@ jobs:
       - name: Download merged assignments artifact
         uses: actions/download-artifact@v4
         with:
-          name: merged-assignments
           path: ${{ github.workspace }}/staging/deviceconfiguration/assignments/artifacts
           run-id: ${{ github.event.workflow_run.id }}
 
