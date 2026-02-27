@@ -170,10 +170,6 @@ jobs:
             # Retrieve the paths of existing and new assignment files
             $existingFile = '${{ steps.capture_existing_json.outputs.existing_assignments_path }}'
             $newFile = '${{ steps.create_new_json.outputs.new_assignments_path }}'
-            
-            # Check if the paths for the files are correct
-            Write-Host "Existing Assignment File: $existingFile"
-            Write-Host "New Assignment File: $newFile"
         
             # Validate that the files exist
             if (Test-Path $existingFile) {
