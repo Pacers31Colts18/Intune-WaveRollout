@@ -1,4 +1,4 @@
-name: GitHubAction-JL-Intune-AssignmentCheck-SettingsCatalog
+name: Intune-DeviceConfiguration-AssignmentCheck
 
 on:
   pull_request:
