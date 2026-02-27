@@ -1,4 +1,4 @@
-name: GitHubAction-JL-Intune-Check-And-Import-SettingsCatalog
+name: Intune-DeviceConfiguration-ImportPolicy
 
 on:
   pull_request:
