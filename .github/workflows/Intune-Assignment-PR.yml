@@ -107,9 +107,6 @@ jobs:
           $existingFile = (Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter "*_Assignments.json").FullName
           echo "existing_assignments_path=$existingFile" >> $env:GITHUB_OUTPUT
 
-          # Step output for downstream use
-          echo "all_assignments=$(ConvertTo-Json $allAssignments -Depth 10 -Compress)" >> $env:GITHUB_OUTPUT
-
       # -------------------------------
       # Step 2: Upload artifact of existing assignments
       # -------------------------------
@@ -145,11 +142,9 @@ jobs:
               New-IntuneAssignmentJson -InputFilePath $file.FullName -OutputFilePath "${{ env.EXPORT_FOLDER }}\$($file.BaseName).json"
           }
 
-          # Store the new assignment file path
-          $newAssignmentFile = (Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter "new*.json").FullName
+          # Store the file path for later use
+          $newAssignmentFile = (Get-ChildItem -Path "${{ env.EXPORT_FOLDER }}" -Filter "*_Assignments.json").FullName
           echo "new_assignments_path=$newAssignmentFile" >> $env:GITHUB_OUTPUT
-
-          echo "new_assignments_path=${{ env.EXPORT_FOLDER }}" >> $env:GITHUB_OUTPUT
 
       # -------------------------------
       # Step 4: Upload new assignments artifact
