@@ -4,13 +4,13 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
-      - 'staging/policies/**'
+      - 'staging/deviceconfiguration/policies/**'
 
   push:
     branches:
       - main
     paths:
-      - 'staging/policies/**'
+      - 'staging/deviceconfiguration/policies/**'
 
 permissions:
   id-token: write
@@ -20,7 +20,7 @@ permissions:
 
 env:
   REPO_DIR: ${{ github.workspace }}
-  STAGING_FOLDER: ${{ github.workspace }}/staging/policies
+  STAGING_FOLDER: ${{ github.workspace }}/staging/deviceconfiguration/policies
 
 jobs:
 
