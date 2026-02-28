@@ -105,23 +105,17 @@ jobs:
                   Write-Host "Processing PolicyId: $policyId"
 
                   # 1. Export existing
-                  Export-IntuneDeviceConfigurationPolicyAssignments `
-                      -policyId $policyId `
-                      -outputFolder $policyFolder
+                  Export-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId -outputFolder $policyFolder
+                  Write-Host "Processing export of existing policies for $policyId"
 
                   # 2. Create new JSON
-                  New-IntuneAssignmentJson `
-                      -InputFilePath $file.FullName `
-                      -OutputFilePath "$policyFolder/new-assignments.json"
+                  New-IntuneAssignmentJson -InputFilePath $file.FullName -OutputFilePath "$policyFolder/new-assignments.json"
+                  Write-Host "Creating new JSON file from csv"
 
                   # 3. Merge
                   $existingFile = Get-ChildItem $policyFolder -Filter "*_Assignments.json"
-
-                  if ($existingFile) {
-                      Merge-IntuneAssignmentJson `
-                          -originalassignmentFile $existingFile.FullName `
-                          -additionalassignmentFile "$policyFolder/new-assignments.json" `
-                          -OutputFile "$policyFolder/merged-assignments.json"
+                  Merge-IntuneAssignmentJson -originalassignmentFile $existingFile.FullName -additionalassignmentFile "$policyFolder/new-assignments.json" -OutputFile "$policyFolder/merged-assignments.json"
+                  Write-Host "Merging JSON files"
                   }
               }
           }
