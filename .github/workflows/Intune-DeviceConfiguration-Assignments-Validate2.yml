@@ -1,0 +1,186 @@
+name: Intune-DeviceConfiguration-Assignments-Validate2
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: write
+  statuses: write
+  id-token: write
+
+env:
+  REPO_DIR: ${{ github.workspace }}
+  ASSIGNMENT_FOLDER: ${{ github.workspace }}/staging/deviceconfiguration/assignments
+
+jobs:
+  validate_and_create_assignments:
+    runs-on: ubuntu-latest
+    environment: GraphApi
+
+    # Prevent infinite loop if another workflow runs on push
+    if: github.actor != 'github-actions[bot]'
+
+    steps:
+      # ------------------------------------------------------------
+      # Checkout
+      # ------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ------------------------------------------------------------
+      # Set Date Variable
+      # ------------------------------------------------------------
+      - name: Set date variable
+        id: set_date
+        run: echo "RUN_DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+
+      # ------------------------------------------------------------
+      # Azure Login
+      # ------------------------------------------------------------
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # ------------------------------------------------------------
+      # Install Graph Modules
+      # ------------------------------------------------------------
+      - name: Install Microsoft Graph Modules
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+          Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
+
+      # ------------------------------------------------------------
+      # Capture Existing Assignments
+      # ------------------------------------------------------------
+      - name: Capture Existing Assignments
+        shell: pwsh
+        run: |
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
+
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+
+          $runDate = $env:RUN_DATE
+          $csvFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.csv
+
+          if ($csvFiles.Count -eq 0) {
+              Write-Error "No CSV files found in $($env:ASSIGNMENT_FOLDER)"
+              exit 1
+          }
+
+          $processedPolicyIds = @{}
+
+          foreach ($file in $csvFiles) {
+              $csvData = Import-Csv -Path $file.FullName
+
+              foreach ($row in $csvData) {
+                  $policyId = $row.PolicyId
+                  if (-not $policyId) { continue }
+
+                  if ($processedPolicyIds.Contains($policyId)) { continue }
+                  $processedPolicyIds[$policyId] = $true
+
+                  $policyFolder = "${{ github.workspace }}/staging/$runDate/$policyId"
+                  New-Item -Path $policyFolder -ItemType Directory -Force | Out-Null
+
+                  Write-Host "Exporting existing assignments for PolicyId: $policyId"
+
+                  Export-IntuneDeviceConfigurationPolicyAssignments `
+                      -policyId $policyId `
+                      -outputFolder $policyFolder
+              }
+          }
+
+      # ------------------------------------------------------------
+      # Create New Assignments JSON
+      # ------------------------------------------------------------
+      - name: Create New Assignments JSON
+        shell: pwsh
+        run: |
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
+
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+
+          $runDate = $env:RUN_DATE
+          $csvFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.csv
+
+          foreach ($file in $csvFiles) {
+              $csvData = Import-Csv -Path $file.FullName
+
+              foreach ($row in $csvData) {
+                  $policyId = $row.PolicyId
+                  if (-not $policyId) { continue }
+
+                  $policyFolder = "${{ github.workspace }}/staging/$runDate/$policyId"
+                  New-Item -Path $policyFolder -ItemType Directory -Force | Out-Null
+
+                  Write-Host "Creating new assignments JSON for PolicyId: $policyId"
+
+                  New-IntuneAssignmentJson `
+                      -InputFilePath $file.FullName `
+                      -OutputFilePath "$policyFolder/new-assignments.json"
+              }
+          }
+
+      # ------------------------------------------------------------
+      # Merge Assignments
+      # ------------------------------------------------------------
+      - name: Merge Assignments
+        shell: pwsh
+        run: |
+          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
+
+          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+
+          $runDate = $env:RUN_DATE
+          $stagingPath = "${{ github.workspace }}/staging/$runDate"
+
+          if (-not (Test-Path $stagingPath)) {
+              Write-Error "Staging path not found."
+              exit 1
+          }
+
+          $policyFolders = Get-ChildItem -Path $stagingPath -Directory
+
+          foreach ($folder in $policyFolders) {
+
+              $existingFile = Get-ChildItem $folder.FullName -Filter "*_Assignments.json" -ErrorAction SilentlyContinue
+              $newFile = Join-Path $folder.FullName "new-assignments.json"
+
+              if ((Test-Path $existingFile.FullName) -and (Test-Path $newFile)) {
+
+                  Write-Host "Merging assignments for PolicyId folder: $($folder.Name)"
+
+                  Merge-IntuneAssignmentJson `
+                      -originalassignmentFile $existingFile.FullName `
+                      -additionalassignmentFile $newFile `
+                      -OutputFile "$($folder.FullName)/merged-assignments.json"
+              }
+              else {
+                  Write-Warning "Missing files for PolicyId folder: $($folder.Name)"
+              }
+          }
+
+      # ------------------------------------------------------------
+      # Commit & Push to Repo
+      # ------------------------------------------------------------
+      - name: Commit and push staged JSON files
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+
+          git add staging/
+
+          git commit -m "Auto-generated Intune assignment JSON - ${{ env.RUN_DATE }}" || echo "No changes to commit"
+
+          git push
