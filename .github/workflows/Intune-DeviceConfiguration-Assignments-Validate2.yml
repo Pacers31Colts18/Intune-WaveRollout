@@ -1,4 +1,4 @@
-name: Intune-DeviceConfiguration-Assignments-Validate2
+name: Intune-DeviceConfiguration-Assignments-Validate
 
 on:
   pull_request:
@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: GraphApi
 
-    # Prevent infinite loop if another workflow runs on push
+    # Prevent recursion if push workflow exists
     if: github.actor != 'github-actions[bot]'
 
     steps:
@@ -36,7 +36,7 @@ jobs:
       # ------------------------------------------------------------
       - name: Set date variable
         id: set_date
-        run: echo "RUN_DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+        run: echo "run_date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       # ------------------------------------------------------------
       # Azure Login
@@ -65,14 +65,13 @@ jobs:
         run: |
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
-
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
           $runDate = $env:RUN_DATE
           $csvFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.csv
 
           if ($csvFiles.Count -eq 0) {
-              Write-Error "No CSV files found in $($env:ASSIGNMENT_FOLDER)"
+              Write-Error "No CSV files found."
               exit 1
           }
 
@@ -91,13 +90,20 @@ jobs:
                   $policyFolder = "${{ github.workspace }}/staging/$runDate/$policyId"
                   New-Item -Path $policyFolder -ItemType Directory -Force | Out-Null
 
-                  Write-Host "Exporting existing assignments for PolicyId: $policyId"
+                  Write-Host "Exporting existing assignments for $policyId"
 
                   Export-IntuneDeviceConfigurationPolicyAssignments `
                       -policyId $policyId `
                       -outputFolder $policyFolder
               }
           }
+
+      # Upload existing assignments artifact
+      - name: Upload existing assignments artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: existing-assignments-${{ steps.set_date.outputs.run_date }}
+          path: staging/${{ steps.set_date.outputs.run_date }}
 
       # ------------------------------------------------------------
       # Create New Assignments JSON
@@ -107,7 +113,6 @@ jobs:
         run: |
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
-
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
           $runDate = $env:RUN_DATE
@@ -123,13 +128,20 @@ jobs:
                   $policyFolder = "${{ github.workspace }}/staging/$runDate/$policyId"
                   New-Item -Path $policyFolder -ItemType Directory -Force | Out-Null
 
-                  Write-Host "Creating new assignments JSON for PolicyId: $policyId"
+                  Write-Host "Creating new assignments for $policyId"
 
                   New-IntuneAssignmentJson `
                       -InputFilePath $file.FullName `
                       -OutputFilePath "$policyFolder/new-assignments.json"
               }
           }
+
+      # Upload new assignments artifact
+      - name: Upload new assignments artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-assignments-${{ steps.set_date.outputs.run_date }}
+          path: staging/${{ steps.set_date.outputs.run_date }}
 
       # ------------------------------------------------------------
       # Merge Assignments
@@ -139,16 +151,10 @@ jobs:
         run: |
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
-
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
           $runDate = $env:RUN_DATE
           $stagingPath = "${{ github.workspace }}/staging/$runDate"
-
-          if (-not (Test-Path $stagingPath)) {
-              Write-Error "Staging path not found."
-              exit 1
-          }
 
           $policyFolders = Get-ChildItem -Path $stagingPath -Directory
 
@@ -157,19 +163,23 @@ jobs:
               $existingFile = Get-ChildItem $folder.FullName -Filter "*_Assignments.json" -ErrorAction SilentlyContinue
               $newFile = Join-Path $folder.FullName "new-assignments.json"
 
-              if ((Test-Path $existingFile.FullName) -and (Test-Path $newFile)) {
+              if ($existingFile -and (Test-Path $newFile)) {
 
-                  Write-Host "Merging assignments for PolicyId folder: $($folder.Name)"
+                  Write-Host "Merging assignments for $($folder.Name)"
 
                   Merge-IntuneAssignmentJson `
                       -originalassignmentFile $existingFile.FullName `
                       -additionalassignmentFile $newFile `
                       -OutputFile "$($folder.FullName)/merged-assignments.json"
               }
-              else {
-                  Write-Warning "Missing files for PolicyId folder: $($folder.Name)"
-              }
           }
+
+      # Upload merged assignments artifact
+      - name: Upload merged assignments artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-assignments${{ steps.set_date.outputs.run_date }}
+          path: staging/${{ steps.set_date.outputs.run_date }}
 
       # ------------------------------------------------------------
       # Commit & Push to Repo
@@ -179,8 +189,8 @@ jobs:
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
 
-          git add staging/
+          git add staging/${{ steps.set_date.outputs.run_date }}
 
-          git commit -m "Auto-generated Intune assignment JSON - ${{ env.RUN_DATE }}" || echo "No changes to commit"
+          git commit -m "Auto-generated Intune assignment JSON - ${{ steps.set_date.outputs.run_date }}" || echo "No changes to commit"
 
           git push
