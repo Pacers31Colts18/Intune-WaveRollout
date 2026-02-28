@@ -1,7 +1,7 @@
 function Merge-IntuneAssignmentJson {
     [CmdletBinding()]
     Param(
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $false)]
         [string]$OriginalAssignmentFile,
 
         [Parameter(Mandatory = $false)]
