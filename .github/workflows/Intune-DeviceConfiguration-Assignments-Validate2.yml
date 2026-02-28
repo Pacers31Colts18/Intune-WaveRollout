@@ -118,7 +118,6 @@ jobs:
                   Write-Host "Merging JSON files"
                   }
               }
-          }
 
           if ($processedCount -eq 0) {
               Write-Error "No PolicyIds were processed. Nothing generated."
