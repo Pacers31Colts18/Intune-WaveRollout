@@ -75,7 +75,14 @@ jobs:
           $basePath = "${{ github.workspace }}/staging/$runDate"
 
           # Ensure base staging folder exists
-          New-Item -Path $basePath -ItemType Directory -Force | Out-Null
+          $stagingFolder = New-Item -Path $basePath -ItemType Directory -Force | Out-Null
+
+          if ($stagingFolder) {
+              Write-Host "Created staging folder at $basePath"
+          } else {
+              Write-Warning "Failed to create staging folder at $basePath"
+              exit 1
+          }
 
           $csvFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.csv
 
