@@ -56,102 +56,64 @@ jobs:
           Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
-      # ------------------------------------------------------------
-      # Process Assignments
-      # ------------------------------------------------------------
-      - name: Process Assignments
-        shell: pwsh
-        env:
-          RUN_DATE: ${{ steps.set_date.outputs.run_date }}
-        run: |
-          $ErrorActionPreference = "Stop"
+            foreach ($file in $csvFiles) {
+          $csvData = Import-Csv -Path $file.FullName
 
-          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
-          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
+          foreach ($row in $csvData) {
+              $policyId = $row.PolicyId
+              if (-not $policyId) { continue }
 
-          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+              if ($processedPolicyIds.Contains($policyId)) { continue }
+              $processedPolicyIds[$policyId] = $true
+              $processedCount++
 
-          $runDate = $env:RUN_DATE
-          $basePath = "${{ github.workspace }}/staging/$runDate"
+              $policyFolder = "$basePath/$policyId"
+              New-Item -Path $policyFolder -ItemType Directory -Force | Out-Null
 
-          # Ensure base staging folder exists
-          $stagingFolder = New-Item -Path $basePath -ItemType Directory -Force
+              if (Test-Path -path $policyFolder) {
+                  Write-Host "Created folder for PolicyId $policyId at $policyFolder"
+              } else {
+                  Write-Warning "Failed to create folder for PolicyId $policyId at $policyFolder"
+                  continue
+              }
 
-          if (Test-Path $stagingFolder) {
-              Write-Host "Created staging folder at $basePath"
-          } else {
-              Write-Warning "Failed to create staging folder at $basePath"
-              exit 1
-          }
+              Write-Host "Processing PolicyId: $policyId"
 
-          $csvFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.csv
+              # 1. Export existing assignments
+              Write-Host "Processing export of existing policies for $policyId"
+              Export-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId -outputFolder $policyFolder
 
-          if ($csvFiles.Count -eq 0) {
-              Write-Error "No CSV files found in ASSIGNMENT_FOLDER."
-          }
+              # 2. Create new JSON
+              Write-Host "Creating new JSON file from csv"
+              New-IntuneAssignmentJson -InputFilePath $file.FullName -OutputFilePath "$policyFolder/new-assignments.json"
 
-          $processedPolicyIds = @{}
-          $processedCount = 0
-
-          foreach ($file in $csvFiles) {
-
-              $csvData = Import-Csv -Path $file.FullName
-
-              foreach ($row in $csvData) {
-
-                  $policyId = $row.PolicyId
-                  if (-not $policyId) { continue }
-
-                  if ($processedPolicyIds.Contains($policyId)) { continue }
-                  $processedPolicyIds[$policyId] = $true
-                  $processedCount++
-
-                  $policyFolder = "$basePath/$policyId"
-                  New-Item -Path $policyFolder -ItemType Directory -Force | Out-Null
-
-                  if (Test-Path -path $policyFolder) {
-                      Write-Host "Created folder for PolicyId $policyId at $policyFolder"
-                  } else {
-                      Write-Warning "Failed to create folder for PolicyId $policyId at $policyFolder"
-                      continue
-                  }
-
-                  Write-Host "Processing PolicyId: $policyId"
-
-                  # 1. Export existing
-                  Write-Host "Processing export of existing policies for $policyId"
-                  Export-IntuneDeviceConfigurationPolicyAssignments -policyId $policyId -outputFolder $policyFolder
-
-                  # 2. Create new JSON
-                  Write-Host "Creating new JSON file from csv"
-                  New-IntuneAssignmentJson -InputFilePath $file.FullName -OutputFilePath "$policyFolder/new-assignments.json"
-
-                  # 3. Merge
-                  Write-Host "Merging JSON files"
-                  $existingFile = Get-ChildItem $policyFolder -Filter "*_Assignments.json" | Select-Object -First 1
-                  $newFile = "$policyFolder/new-assignments.json"
-                  
-                  $originalPath = if ($existingFile) { $existingFile.FullName } else { $null }
-                  $additionalPath = if (Test-Path $newFile) { $newFile } else { $null }
-                  
-                  # Only run merge if at least one file exists
-                  if ($originalPath -and $additionalPath) {
-                      Merge-IntuneAssignmentJson -OriginalAssignmentFile $originalPath -AdditionalAssignmentFile $additionalPath -OutputFile "$policyFolder/merged-assignments.json"
-                  }
-                  else {
-                      Write-Warning "No assignment files found to merge for $policyId"
-                      Write-Host "Renaming $additionalPath to "merged-assignments.json"
-                      Rename-Item -path $additionalPath -newname "merged-assignments.json"
-                  }
+              # 3. Merge
+              Write-Host "Merging JSON files"
+              $existingFile = Get-ChildItem $policyFolder -Filter "*_Assignments.json" | Select-Object -First 1
+              $newFile = "$policyFolder/new-assignments.json"
+              
+              $originalPath = if ($existingFile) { $existingFile.FullName } else { $null }
+              $additionalPath = if (Test-Path $newFile) { $newFile } else { $null }
+              
+              # Only run merge if at least one file exists
+              if ($originalPath -and $additionalPath) {
+                  Merge-IntuneAssignmentJson -OriginalAssignmentFile $originalPath -AdditionalAssignmentFile $additionalPath -OutputFile "$policyFolder/merged-assignments.json"
+              }
+              else {
+                  Write-Warning "No assignment files found to merge for $policyId."
+                  if ($additionalPath) {
+                      Write-Host "Renaming new assignment file to 'merged-assignments.json'"
+                      Rename-Item -Path $additionalPath -NewName "merged-assignments.json"
                   }
               }
+          }
+          }
 
           if ($processedCount -eq 0) {
               Write-Error "No PolicyIds were processed. Nothing generated."
           }
 
           Write-Host "Processed $processedCount PolicyIds successfully."
-
       # ------------------------------------------------------------
       # Debug Folder Structure (Temporary but Useful)
       # ------------------------------------------------------------
@@ -177,9 +139,9 @@ jobs:
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-      
+
           git add staging/${{ steps.set_date.outputs.run_date }}
-      
+
           git commit -m "Auto-generated Intune assignment JSON - ${{ steps.set_date.outputs.run_date }}" || echo "No changes to commit"
-      
+
           git push origin HEAD:${{ github.head_ref }}
