@@ -18,8 +18,6 @@ jobs:
   validate_and_create_assignments:
     runs-on: ubuntu-latest
     environment: GraphApi
-
-    # Prevent recursion if push workflow exists
     if: github.actor != 'github-actions[bot]'
 
     steps:
@@ -32,7 +30,7 @@ jobs:
           fetch-depth: 0
 
       # ------------------------------------------------------------
-      # Set Date Variable
+      # Set Date Output
       # ------------------------------------------------------------
       - name: Set date variable
         id: set_date
@@ -58,128 +56,98 @@ jobs:
           Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
 
       # ------------------------------------------------------------
-      # Capture Existing Assignments
+      # Process Assignments
       # ------------------------------------------------------------
-      - name: Capture Existing Assignments
+      - name: Process Assignments
         shell: pwsh
+        env:
+          RUN_DATE: ${{ steps.set_date.outputs.run_date }}
         run: |
+          $ErrorActionPreference = "Stop"
+
           $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
+
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
 
           $runDate = $env:RUN_DATE
+          $basePath = "${{ github.workspace }}/staging/$runDate"
+
+          # Ensure base staging folder exists
+          New-Item -Path $basePath -ItemType Directory -Force | Out-Null
+
           $csvFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.csv
 
           if ($csvFiles.Count -eq 0) {
-              Write-Error "No CSV files found."
-              exit 1
+              Write-Error "No CSV files found in ASSIGNMENT_FOLDER."
           }
 
           $processedPolicyIds = @{}
+          $processedCount = 0
 
           foreach ($file in $csvFiles) {
+
               $csvData = Import-Csv -Path $file.FullName
 
               foreach ($row in $csvData) {
+
                   $policyId = $row.PolicyId
                   if (-not $policyId) { continue }
 
                   if ($processedPolicyIds.Contains($policyId)) { continue }
                   $processedPolicyIds[$policyId] = $true
+                  $processedCount++
 
-                  $policyFolder = "${{ github.workspace }}/staging/$runDate/$policyId"
+                  $policyFolder = "$basePath/$policyId"
                   New-Item -Path $policyFolder -ItemType Directory -Force | Out-Null
 
-                  Write-Host "Exporting existing assignments for $policyId"
+                  Write-Host "Processing PolicyId: $policyId"
 
+                  # 1. Export existing
                   Export-IntuneDeviceConfigurationPolicyAssignments `
                       -policyId $policyId `
                       -outputFolder $policyFolder
-              }
-          }
 
-      # Upload existing assignments artifact
-      - name: Upload existing assignments artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: existing-assignments-${{ steps.set_date.outputs.run_date }}
-          path: staging/${{ steps.set_date.outputs.run_date }}
-
-      # ------------------------------------------------------------
-      # Create New Assignments JSON
-      # ------------------------------------------------------------
-      - name: Create New Assignments JSON
-        shell: pwsh
-        run: |
-          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
-          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
-          Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
-          $runDate = $env:RUN_DATE
-          $csvFiles = Get-ChildItem -Path "${{ env.ASSIGNMENT_FOLDER }}" -Filter *.csv
-
-          foreach ($file in $csvFiles) {
-              $csvData = Import-Csv -Path $file.FullName
-
-              foreach ($row in $csvData) {
-                  $policyId = $row.PolicyId
-                  if (-not $policyId) { continue }
-
-                  $policyFolder = "${{ github.workspace }}/staging/$runDate/$policyId"
-                  New-Item -Path $policyFolder -ItemType Directory -Force | Out-Null
-
-                  Write-Host "Creating new assignments for $policyId"
-
+                  # 2. Create new JSON
                   New-IntuneAssignmentJson `
                       -InputFilePath $file.FullName `
                       -OutputFilePath "$policyFolder/new-assignments.json"
+
+                  # 3. Merge
+                  $existingFile = Get-ChildItem $policyFolder -Filter "*_Assignments.json"
+
+                  if ($existingFile) {
+                      Merge-IntuneAssignmentJson `
+                          -originalassignmentFile $existingFile.FullName `
+                          -additionalassignmentFile "$policyFolder/new-assignments.json" `
+                          -OutputFile "$policyFolder/merged-assignments.json"
+                  }
               }
           }
 
-      # Upload new assignments artifact
-      - name: Upload new assignments artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: new-assignments-${{ steps.set_date.outputs.run_date }}
-          path: staging/${{ steps.set_date.outputs.run_date }}
+          if ($processedCount -eq 0) {
+              Write-Error "No PolicyIds were processed. Nothing generated."
+          }
+
+          Write-Host "Processed $processedCount PolicyIds successfully."
 
       # ------------------------------------------------------------
-      # Merge Assignments
+      # Debug Folder Structure (Temporary but Useful)
       # ------------------------------------------------------------
-      - name: Merge Assignments
-        shell: pwsh
+      - name: Debug staging folder
         run: |
-          $token = (az account get-access-token --resource https://graph.microsoft.com | ConvertFrom-Json).accessToken
-          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
-          Import-Module -Name "${{ env.REPO_DIR }}" -Force
+          echo "Listing staging folder:"
+          ls -R staging || echo "No staging folder found"
 
-          $runDate = $env:RUN_DATE
-          $stagingPath = "${{ github.workspace }}/staging/$runDate"
-
-          $policyFolders = Get-ChildItem -Path $stagingPath -Directory
-
-          foreach ($folder in $policyFolders) {
-
-              $existingFile = Get-ChildItem $folder.FullName -Filter "*_Assignments.json" -ErrorAction SilentlyContinue
-              $newFile = Join-Path $folder.FullName "new-assignments.json"
-
-              if ($existingFile -and (Test-Path $newFile)) {
-
-                  Write-Host "Merging assignments for $($folder.Name)"
-
-                  Merge-IntuneAssignmentJson `
-                      -originalassignmentFile $existingFile.FullName `
-                      -additionalassignmentFile $newFile `
-                      -OutputFile "$($folder.FullName)/merged-assignments.json"
-              }
-          }
-
-      # Upload merged assignments artifact
-      - name: Upload merged assignments artifact
+      # ------------------------------------------------------------
+      # Upload Single Artifact
+      # ------------------------------------------------------------
+      - name: Upload assignments artifact
         uses: actions/upload-artifact@v4
         with:
-          name: merged-assignments${{ steps.set_date.outputs.run_date }}
+          name: assignments-${{ steps.set_date.outputs.run_date }}
           path: staging/${{ steps.set_date.outputs.run_date }}
+          if-no-files-found: error
 
       # ------------------------------------------------------------
       # Commit & Push to Repo
