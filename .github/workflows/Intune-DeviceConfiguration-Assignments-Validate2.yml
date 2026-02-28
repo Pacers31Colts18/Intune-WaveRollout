@@ -59,8 +59,8 @@ jobs:
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force)
 
           Import-Module -Name "${{ env.REPO_DIR }}" -Force
-
-          $runDate = $env:RUN_DATE
+          
+          $runDate = "${{ steps.set_date.outputs.run_date }}"
           $basePath = "${{ github.workspace }}/staging/$runDate"
 
           # Ensure base staging folder exists
