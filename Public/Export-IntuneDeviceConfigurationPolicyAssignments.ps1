@@ -27,13 +27,13 @@ function Export-IntuneDeviceConfigurationPolicyAssignments {
     $assignmentsUri = "https://graph.microsoft.com/$graphApiVersion/deviceManagement/configurationPolicies/$policyId/assignments"
     $currentAssignments = Invoke-MgGraphRequest -Uri $assignmentsUri -Method GET
 
-    if (-not $currentAssignments) {
+    if (-not $currentAssignments.value) {
         Write-Warning "No assignments found for PolicyId $policyId"
-        $currentAssignments = @()
+        break
     }
 
     # Convert to JSON
-    $json = $currentAssignments | ConvertTo-Json -Depth 10
+    $json = $currentAssignments.value | ConvertTo-Json -Depth 10
 
     # Save to file if output folder specified
     if ($outputFolder) {
