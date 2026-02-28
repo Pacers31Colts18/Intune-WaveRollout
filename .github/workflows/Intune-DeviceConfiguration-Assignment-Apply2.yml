@@ -80,18 +80,18 @@ jobs:
           Import-Module -Name "${{ github.workspace }}" -Force
 
           $changedFiles = @"
-${{ steps.changed.outputs.files }}
-"@ -split "`n"
-
-          foreach ($file in $changedFiles) {
-              if (-not [string]::IsNullOrWhiteSpace($file)) {
-
-                  $fullPath = Join-Path "${{ github.workspace }}" $file
-
-                  Write-Host "Applying assignments from: $fullPath"
-
-                  Set-IntuneDeviceConfigurationPolicyAssignment `
-                      -InputFilePath $fullPath
+          ${{ steps.changed.outputs.files }}
+          "@ -split "`n"
+          
+                    foreach ($file in $changedFiles) {
+                        if (-not [string]::IsNullOrWhiteSpace($file)) {
+          
+                            $fullPath = Join-Path "${{ github.workspace }}" $file
+          
+                            Write-Host "Applying assignments from: $fullPath"
+          
+                            Set-IntuneDeviceConfigurationPolicyAssignment `
+                                -InputFilePath $fullPath
 
                   Write-Host "Applied successfully."
               }
