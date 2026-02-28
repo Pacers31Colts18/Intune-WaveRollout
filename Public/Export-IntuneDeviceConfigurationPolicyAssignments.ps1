@@ -29,19 +29,17 @@ function Export-IntuneDeviceConfigurationPolicyAssignments {
 
     if (-not $currentAssignments.value) {
         Write-Warning "No assignments found for PolicyId $policyId"
-        continue
     }
+    if ($currentAssignments.value) {
+        # Convert to JSON
+        $json = $currentAssignments.value | ConvertTo-Json -Depth 10
 
-    # Convert to JSON
-    $json = $currentAssignments.value | ConvertTo-Json -Depth 10
-
-    # Save to file if output folder specified
-    if ($outputFolder) {
-        if (-not (Test-Path $outputFolder)) { New-Item -ItemType Directory -Path $outputFolder -Force | Out-Null }
-        $safeName = ($policyResponse.Name -replace '[\\/:*?"<>|]', '_')
-        $filePath = Join-Path -Path $outputFolder -ChildPath "$safeName$($policyResponse.Id)_Assignments.json"
-        $json | Set-Content -Path $filePath -Force
-        Write-Host "Assignments exported to $filePath"
+        # Save to file if output folder specified
+            if (-not (Test-Path $outputFolder)) { New-Item -ItemType Directory -Path $outputFolder -Force | Out-Null }
+            $safeName = ($policyResponse.Name -replace '[\\/:*?"<>|]', '_')
+            $filePath = Join-Path -Path $outputFolder -ChildPath "$safeName$($policyResponse.Id)_Assignments.json"
+            $json | Set-Content -Path $filePath -Force
+            Write-Host "Assignments exported to $filePath"
     }
     return $json
 }
