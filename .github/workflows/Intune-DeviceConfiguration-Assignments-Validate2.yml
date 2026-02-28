@@ -135,11 +135,13 @@ jobs:
                   $additionalPath = if (Test-Path $newFile) { $newFile } else { $null }
                   
                   # Only run merge if at least one file exists
-                  if ($originalPath -or $additionalPath) {
+                  if ($originalPath -and $additionalPath) {
                       Merge-IntuneAssignmentJson -OriginalAssignmentFile $originalPath -AdditionalAssignmentFile $additionalPath -OutputFile "$policyFolder/merged-assignments.json"
                   }
                   else {
                       Write-Warning "No assignment files found to merge for $policyId"
+                      Write-Host "Renaming $additionalPath to "merged-assignments.json"
+                      Rename-Item -path $additionalPath -newname "merged-assignments.json"
                   }
                   }
               }
