@@ -75,9 +75,9 @@ jobs:
           $basePath = "${{ github.workspace }}/staging/$runDate"
 
           # Ensure base staging folder exists
-          $stagingFolder = New-Item -Path $basePath -ItemType Directory -Force | Out-Null
+          $stagingFolder = New-Item -Path $basePath -ItemType Directory -Force
 
-          if ($stagingFolder) {
+          if (Test-Path $stagingFolder) {
               Write-Host "Created staging folder at $basePath"
           } else {
               Write-Warning "Failed to create staging folder at $basePath"
