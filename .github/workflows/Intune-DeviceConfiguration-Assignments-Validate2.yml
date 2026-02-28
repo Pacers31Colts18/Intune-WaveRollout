@@ -128,8 +128,19 @@ jobs:
 
                   # 3. Merge
                   Write-Host "Merging JSON files"
-                  $existingFile = Get-ChildItem $policyFolder -Filter "*_Assignments.json"
-                  Merge-IntuneAssignmentJson -originalassignmentFile $existingFile.FullName -additionalassignmentFile "$policyFolder/new-assignments.json" -OutputFile "$policyFolder/merged-assignments.json"
+                  $existingFile = Get-ChildItem $policyFolder -Filter "*_Assignments.json" | Select-Object -First 1
+                  $newFile = "$policyFolder/new-assignments.json"
+                  
+                  $originalPath = if ($existingFile) { $existingFile.FullName } else { $null }
+                  $additionalPath = if (Test-Path $newFile) { $newFile } else { $null }
+                  
+                  # Only run merge if at least one file exists
+                  if ($originalPath -or $additionalPath) {
+                      Merge-IntuneAssignmentJson -OriginalAssignmentFile $originalPath -AdditionalAssignmentFile $additionalPath -OutputFile "$policyFolder/merged-assignments.json"
+                  }
+                  else {
+                      Write-Warning "No assignment files found to merge for $policyId"
+                  }
                   }
               }
 
