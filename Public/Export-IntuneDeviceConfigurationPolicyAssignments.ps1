@@ -29,6 +29,7 @@ function Export-IntuneDeviceConfigurationPolicyAssignments {
 
     if (-not $currentAssignments.value) {
         Write-Warning "No assignments found for PolicyId $policyId"
+        return $null
     }
     if ($currentAssignments.value) {
         # Convert to JSON
