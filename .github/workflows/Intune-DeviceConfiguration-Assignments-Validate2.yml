@@ -102,6 +102,13 @@ jobs:
                   $policyFolder = "$basePath/$policyId"
                   New-Item -Path $policyFolder -ItemType Directory -Force | Out-Null
 
+                  if (Test-Path -path $policyFolder) {
+                      Write-Host "Created folder for PolicyId $policyId at $policyFolder"
+                  } else {
+                      Write-Warning "Failed to create folder for PolicyId $policyId at $policyFolder"
+                      continue
+                  }
+
                   Write-Host "Processing PolicyId: $policyId"
 
                   # 1. Export existing
