@@ -83,18 +83,35 @@ jobs:
           ${{ steps.changed.outputs.files }}
           "@ -split "`n"
           
-                    foreach ($file in $changedFiles) {
-                        if (-not [string]::IsNullOrWhiteSpace($file)) {
-          
-                            $fullPath = Join-Path "${{ github.workspace }}" $file
-          
-                            Write-Host "Applying assignments from: $fullPath"
-          
-                            Set-IntuneDeviceConfigurationPolicyAssignment `
-                                -InputFilePath $fullPath
-
+          foreach ($file in $changedFiles) {
+              if (-not [string]::IsNullOrWhiteSpace($file)) {
+  
+                  $fullPath = Join-Path "${{ github.workspace }}" $file
+  
+                  Write-Host "Applying assignments from: $fullPath"
+  
+                  Set-IntuneDeviceConfigurationPolicyAssignment `
+                      -InputFilePath $fullPath
+  
                   Write-Host "Applied successfully."
               }
           }
 
           Write-Host "All changed assignments applied."
+
+      # ---------------------------------------------------------
+      # Remove subfolder in staging
+      # ---------------------------------------------------------
+      - name: Remove subfolder in staging
+        run: |
+          echo "Identifying subfolders in the staging directory..."
+          folders=$(find ./staging -mindepth 1 -maxdepth 1 -type d)
+
+          if [ -z "$folders" ]; then
+            echo "No subfolders found in staging to remove."
+          else
+            echo "Subfolders to be removed:"
+            echo "$folders"
+            rm -rf ./staging/*
+            echo "Subfolders removed successfully."
+          fi
