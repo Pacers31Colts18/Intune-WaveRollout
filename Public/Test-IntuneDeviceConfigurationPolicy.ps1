@@ -1,4 +1,21 @@
 function Test-IntuneDeviceConfigurationPolicy {
+<#
+.SYNOPSIS
+Checks if Intune Device Configuration Policies exist in the tenant.
+.DESCRIPTION
+This function checks if Intune Device Configuration Policies exist in the tenant by comparing them with JSON files in a specified folder.
+.PARAMETER InputFilePath
+Mandatory. The path to the input JSON file containing assignments.
+.NOTES
+Requires:
+- Microsoft.Graph PowerShell SDK (e.g., Invoke-MgGraphRequest, Get-MgContext)
+- Microsoft.Graph.DeviceManagement permissions to read and write configuration policies.
+.EXAMPLE
+Test-IntuneDeviceConfigurationPolicy -InputFilePath "C:\temp\IntuneAssignments.json"
+Checks if Intune Device Configuration Policies exist in the tenant.
+.LINK
+ https://learn.microsoft.com/en-us/powershell/microsoftgraph/overview
+    #> 
     Param(
         [Parameter(Mandatory = $false)]
         [string]$inputfilePath

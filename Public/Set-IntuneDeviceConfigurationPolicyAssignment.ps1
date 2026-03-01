@@ -1,4 +1,21 @@
 function Set-IntuneDeviceConfigurationPolicyAssignment {
+<#
+.SYNOPSIS
+Configures Intune Device Configuration Policy assignments from a JSON file.
+.DESCRIPTION
+This function applies assignments to an Intune Device Configuration Policy using a JSON file.
+.PARAMETER InputFilePath
+Mandatory. The path to the input JSON file containing assignments.
+.NOTES
+Requires:
+- Microsoft.Graph PowerShell SDK (e.g., Invoke-MgGraphRequest, Get-MgContext)
+- Microsoft.Graph.DeviceManagement permissions to read and write configuration policies.
+.EXAMPLE
+Set-IntuneDeviceConfigurationPolicyAssignment -InputFilePath "C:\temp\IntuneAssignments.json"
+Applies assignments from the specified JSON file to an Intune Device Configuration Policy.
+.LINK
+ https://learn.microsoft.com/en-us/powershell/microsoftgraph/overview
+    #> 
 
     [CmdletBinding()]
     Param(

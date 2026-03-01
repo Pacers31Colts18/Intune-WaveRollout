@@ -1,4 +1,23 @@
 function New-IntuneAssignmentJson {
+<#
+.SYNOPSIS
+Creates Microsoft Intune Assignment JSON files from CSV input.
+.DESCRIPTION
+This function creates Intune Assignment JSON files from CSV input containing PolicyId, GroupId, and AssignmentType columns.
+.PARAMETER InputFilePath
+Mandatory. The path to the input CSV file.
+.PARAMETER OutputFilePath
+Mandatory. The path to the output JSON file.
+.NOTES
+Requires:
+- Microsoft.Graph PowerShell SDK (e.g., Invoke-MgGraphRequest, Get-MgContext)
+- Microsoft.Graph.DeviceManagement permissions to read and write configuration policies.
+.EXAMPLE
+New-IntuneAssignmentJson -InputFilePath "C:\temp\IntuneAssignments.csv" -OutputFilePath "C:\temp\IntuneAssignment.json"
+Creates an Intune Assignment JSON file from the specified CSV input.
+.LINK
+ https://learn.microsoft.com/en-us/powershell/microsoftgraph/overview
+    #> 
 
     [CmdletBinding()]
     Param(
@@ -53,7 +72,7 @@ function New-IntuneAssignmentJson {
         }
 
         $isAllDevices = $groupId -eq "adadadad-808e-44e2-905a-0b7873a8a531"
-        $isAllUsers = $groupId -eq "allusers"
+        $isAllUsers = $groupId -eq "acacacac-9df4-4c7d-9d50-4ef0226f57a9"
         $isExclusion = $assignmentType -eq "exclude"
 
         if ($isExclusion -and ($isAllDevices -or $isAllUsers)) {

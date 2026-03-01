@@ -1,4 +1,21 @@
 Function Import-IntuneDeviceConfigurationPolicy {
+<#
+.SYNOPSIS
+Imports Microsoft Intune Device Configuration Policies from JSON files in a specified folder. It creates new policies or updates existing ones based on the 'name' property in the JSON.
+.DESCRIPTION
+This function imports Intune Device Configuration Policies from JSON files in a specified folder. It creates new policies or updates existing ones based on the 'name' property in the JSON.
+.PARAMETER folderPath
+Mandatory. The path to the folder containing JSON files of Intune Device Configuration Policies.
+.NOTES
+Requires:
+- Microsoft.Graph PowerShell SDK (e.g., Invoke-MgGraphRequest, Get-MgContext)
+- Microsoft.Graph.DeviceManagement permissions to read and write configuration policies.
+.EXAMPLE
+Import-IntuneDeviceConfigurationPolicy -FolderPath "C:\temp\IntunePolicies"
+Imports all Intune Device Configuration Policies from the specified folder.
+.LINK
+ https://learn.microsoft.com/en-us/powershell/microsoftgraph/overview
+    #>      
 
     [CmdletBinding()]
     param
@@ -10,17 +27,20 @@ Function Import-IntuneDeviceConfigurationPolicy {
 
     # Ensure Graph connection exists
     if (-not (Get-MgContext)) {
-        throw "Not connected to Microsoft Graph. Run Connect-MgGraph first."
+        Write-Error "Not connected to Microsoft Graph. Run Connect-MgGraph first."
+        break
     }
 
     if (-not (Test-Path $FolderPath)) {
-        throw "Folder path '$FolderPath' does not exist."
+        Write-Error "Folder path '$FolderPath' does not exist."
+        break
     }
 
     $JsonFiles = Get-ChildItem -Path $FolderPath -Filter *.json -File
 
     if (-not $JsonFiles) {
-        throw "No JSON files found in folder: $FolderPath"
+        Write-Error "No JSON files found in folder: $FolderPath"
+        break
     }
 
     $Results = @()
@@ -28,8 +48,6 @@ Function Import-IntuneDeviceConfigurationPolicy {
     foreach ($File in $JsonFiles) {
 
         Write-Host "Processing: $($File.Name)"
-
-        try {
 
             # Read JSON
             $RawJson = Get-Content -Path $File.FullName -Raw
@@ -46,12 +64,19 @@ Function Import-IntuneDeviceConfigurationPolicy {
             $DisplayName = $JsonObject.name
 
             if (-not $DisplayName) {
-                throw "Policy file '$($File.Name)' does not contain a 'name' property."
+                Write-Error "Policy file '$($File.Name)' does not contain a 'name' property."
+                break
             }
 
             # Check if policy already exists
-            $FilterUri = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$DisplayName'"
-            $Existing = Invoke-MgGraphRequest -Method GET -Uri $FilterUri
+            try {
+                $FilterUri = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$DisplayName'"
+                $Existing = Invoke-MgGraphRequest -Method GET -Uri $FilterUri   
+            }
+            catch {
+                Write-Error "Failed to query existing policies for '$DisplayName': $_"
+                break
+            }
 
             $ExistingPolicy = $Existing.value | Select-Object -First 1
 
@@ -61,45 +86,44 @@ Function Import-IntuneDeviceConfigurationPolicy {
 
                 $PolicyId = $ExistingPolicy.id
                 Write-Host "Policy exists. Updating: $DisplayName ($PolicyId)"
-
-                Invoke-MgGraphRequest `
-                    -Method PUT `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$PolicyId" `
-                    -Body $Body `
-                    -ContentType "application/json"
-
+                try {
+                Invoke-MgGraphRequest -Method PUT -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$PolicyId" -Body $Body -ContentType "application/json"
+                }
+                catch {
+                    Write-Error "Failed to update policy '$DisplayName': $_"
+                    break
+                }
             }
             else {
-
                 Write-Host "Policy does not exist. Creating: $DisplayName"
-
-                $Created = Invoke-MgGraphRequest `
-                    -Method POST `
-                    -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" `
-                    -Body $Body `
-                    -ContentType "application/json"
-
+                try {
+                    $Created = Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" -Body $Body -ContentType "application/json"
+                }
+                catch {
+                    Write-Error "Failed to create policy '$DisplayName': $_"
+                    break
+                }
                 $PolicyId = $Created.id
             }
 
             if (-not $PolicyId) {
-                throw "Failed to determine Policy ID for '$DisplayName'"
+                Write-Error "Failed to determine Policy ID for '$DisplayName'"
+                break
             }
 
-            Write-Host "Success: $DisplayName ($PolicyId)"
+            Write-Host "Policy imported: $DisplayName ($PolicyId)"
 
             # Return object for workflow
             $Results += [PSCustomObject]@{
-                Name = $File.Name      # must match CSV FileName column
+                Name = $File.Name 
                 Id   = $PolicyId
             }
 
         }
         catch {
             Write-Error "Failed processing $($File.Name): $_"
-            throw
+            break
         }
+            return $Results
     }
 
-    return $Results
-}

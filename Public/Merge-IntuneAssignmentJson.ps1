@@ -1,4 +1,19 @@
 function Merge-IntuneAssignmentJson {
+<#
+.SYNOPSIS
+Merges Intune Assignment JSON files.
+.DESCRIPTION
+This function merges two Intune Assignment JSON files into a single output file.
+.PARAMETER OriginalAssignmentFile
+The path to the original assignment JSON file.
+.PARAMETER AdditionalAssignmentFile
+The path to the additional assignment JSON file.
+.PARAMETER OutputFile
+The path to the output merged assignment JSON file.
+.EXAMPLE
+Merge-IntuneAssignmentJson -OriginalAssignmentFile "C:\temp\Original.json" -AdditionalAssignmentFile "C:\temp\Additional.json" -OutputFile "C:\temp\Merged.json"
+Merges two Intune Assignment JSON files into a single output file.
+#> 
     [CmdletBinding()]
     Param(
         [Parameter(Mandatory = $false)]
