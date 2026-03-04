@@ -1,80 +1,91 @@
 function Test-IntuneDeviceConfigurationPolicy {
-<#
-.SYNOPSIS
-Checks if Intune Device Configuration Policies exist in the tenant.
-.DESCRIPTION
-This function checks if Intune Device Configuration Policies exist in the tenant by comparing them with JSON files in a specified folder.
-.PARAMETER InputFilePath
-Mandatory. The path to the input JSON file containing assignments.
-.NOTES
-Requires:
-- Microsoft.Graph PowerShell SDK (e.g., Invoke-MgGraphRequest, Get-MgContext)
-- Microsoft.Graph.DeviceManagement permissions to read and write configuration policies.
-.EXAMPLE
-Test-IntuneDeviceConfigurationPolicy -InputFilePath "C:\temp\IntuneAssignments.json"
-Checks if Intune Device Configuration Policies exist in the tenant.
-.LINK
- https://learn.microsoft.com/en-us/powershell/microsoftgraph/overview
-    #> 
-    Param(
-        [Parameter(Mandatory = $false)]
-        [string]$inputfilePath
-        
+    <#
+    .SYNOPSIS
+        Checks if Intune Device Configuration Policies already exist in the tenant by name.
+    .DESCRIPTION
+        Reads JSON files from a specified folder and checks whether a policy with the same
+        'name' property already exists in the tenant via Microsoft Graph. Returns any matches
+        so the caller can decide how to handle conflicts.
+    .PARAMETER FolderPath
+        Mandatory. The path to the folder containing JSON files of Intune Device Configuration Policies.
+    .NOTES
+        Requires:
+        - Microsoft.Graph PowerShell SDK (Invoke-MgGraphRequest, Get-MgContext)
+        - DeviceManagementConfiguration.Read.All (minimum)
+    .EXAMPLE
+        Test-IntuneDeviceConfigurationPolicy -FolderPath "C:\temp\IntunePolicies"
+    .LINK
+        https://learn.microsoft.com/en-us/powershell/microsoftgraph/overview
+    #>
+
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$FolderPath
     )
 
-    # Microsoft Graph Connection check
-    if ($null -eq (Get-MgContext)) {
-        Write-Error "Authentication needed. Please connect to Microsoft Graph."
+    # Ensure Graph connection exists
+    if (-not (Get-MgContext)) {
+        Write-Error "Not connected to Microsoft Graph. Run Connect-MgGraph first."
         return
     }
 
-    # Initialize
-    $graphApiVersion = "beta"
-    $results = @()
-
-    # Check folder
-    if (-not (Test-Path -Path $filePath)) {
-        Write-Warning "File path not found: $filePath"
+    if (-not (Test-Path -Path $FolderPath)) {
+        Write-Error "Folder path '$FolderPath' does not exist."
         return
     }
 
-    $jsonFiles = Get-ChildItem -Path $filePath -Filter *.json
-    if ($jsonFiles.Count -eq 0) {
-        Write-Warning "No JSON files found in path: $filePath"
+    $JsonFiles = Get-ChildItem -Path $FolderPath -Filter *.json -File
+
+    if (-not $JsonFiles) {
+        Write-Warning "No JSON files found in folder: $FolderPath"
         return
     }
 
-    # Loop through JSON files
-    foreach ($file in $jsonFiles) {
-        $policyData = Get-Content -Path $file.FullName -Raw | ConvertFrom-Json | Select-Object -Property Name, id
+    $Results = @()
 
-        if (-not $policyData.id) {
-            Write-Warning "No ID found in $($file.Name), skipping."
-            continue
-        }
+    foreach ($File in $JsonFiles) {
 
-        $uri = "https://graph.microsoft.com/$graphApiVersion/deviceManagement/configurationPolicies/$($policyData.id)"
+        Write-Verbose "Checking: $($File.Name)"
 
         try {
-            $policyResponse = Invoke-MgGraphRequest -Uri $uri -Method GET -ErrorAction Stop
+            $JsonObject = Get-Content -Path $File.FullName -Raw | ConvertFrom-Json
         }
         catch {
-            Write-Host "Policy $($policyData.Name) - $($policyData.id) not found in tenant."
+            Write-Warning "Could not parse '$($File.Name)' as JSON. Skipping."
             continue
         }
 
-        if ($policyResponse) {
-            $results += [PSCustomObject]@{
-                PolicyName = $policyResponse.Name
-                PolicyId   = $policyResponse.id
+        $PolicyName = $JsonObject.name
+
+        if (-not $PolicyName) {
+            Write-Warning "No 'name' property found in '$($File.Name)'. Skipping."
+            continue
+        }
+
+        
+        $FilterUri = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$PolicyName'"
+
+        try {
+            $Response = Invoke-MgGraphRequest -Method GET -Uri $FilterUri -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Graph query failed for policy name '$PolicyName': $_"
+            continue
+        }
+
+        $Match = $Response.value | Select-Object -First 1
+
+        if ($Match) {
+            Write-Verbose "Found existing policy: $PolicyName [$($Match.id)]"
+            $Results += [PSCustomObject]@{
+                PolicyName = $Match.name
+                PolicyId   = $Match.id
+                SourceFile = $File.Name
             }
         }
     }
 
-    if ($results.Count -gt 0) {
-        Write-Error "Policies found in tenant matching JSON file(s):"
-        Write-Error ($results | Format-Table -AutoSize | Out-String)
-    }
-
-    return $results
+    return $Results
 }

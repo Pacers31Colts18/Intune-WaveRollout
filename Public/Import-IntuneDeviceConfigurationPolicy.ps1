@@ -1,26 +1,31 @@
-Function Import-IntuneDeviceConfigurationPolicy {
-<#
-.SYNOPSIS
-Imports Microsoft Intune Device Configuration Policies from JSON files in a specified folder. It creates new policies or updates existing ones based on the 'name' property in the JSON.
-.DESCRIPTION
-This function imports Intune Device Configuration Policies from JSON files in a specified folder. It creates new policies or updates existing ones based on the 'name' property in the JSON.
-.PARAMETER folderPath
-Mandatory. The path to the folder containing JSON files of Intune Device Configuration Policies.
-.NOTES
-Requires:
-- Microsoft.Graph PowerShell SDK (e.g., Invoke-MgGraphRequest, Get-MgContext)
-- Microsoft.Graph.DeviceManagement permissions to read and write configuration policies.
-.EXAMPLE
-Import-IntuneDeviceConfigurationPolicy -FolderPath "C:\temp\IntunePolicies"
-Imports all Intune Device Configuration Policies from the specified folder.
-.LINK
- https://learn.microsoft.com/en-us/powershell/microsoftgraph/overview
-    #>      
+function Import-IntuneDeviceConfigurationPolicy {
+    <#
+    .SYNOPSIS
+        Imports Intune Device Configuration Policies from JSON files, creating new policies only.
+    .DESCRIPTION
+        Reads JSON files from a specified folder and creates new Intune Device Configuration
+        Policies via Microsoft Graph. If a policy with the same name already exists, the file
+        is skipped and a warning is emitted — use Test-IntuneDeviceConfigurationPolicy first
+        to catch conflicts before import.
 
-    [CmdletBinding()]
-    param
-    (
-        [parameter(Mandatory)]
+        Supports -WhatIf for dry-run validation without hitting the Graph API.
+    .PARAMETER FolderPath
+        Mandatory. The path to the folder containing JSON files of Intune Device Configuration Policies.
+    .NOTES
+        Requires:
+        - Microsoft.Graph PowerShell SDK (Invoke-MgGraphRequest, Get-MgContext)
+        - DeviceManagementConfiguration.ReadWrite.All
+    .EXAMPLE
+        Import-IntuneDeviceConfigurationPolicy -FolderPath "C:\temp\IntunePolicies"
+    .EXAMPLE
+        Import-IntuneDeviceConfigurationPolicy -FolderPath "C:\temp\IntunePolicies" -WhatIf
+    .LINK
+        https://learn.microsoft.com/en-us/powershell/microsoftgraph/overview
+    #>
+
+    [CmdletBinding(SupportsShouldProcess)]
+    param (
+        [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]
         [string]$FolderPath
     )
@@ -28,20 +33,30 @@ Imports all Intune Device Configuration Policies from the specified folder.
     # Ensure Graph connection exists
     if (-not (Get-MgContext)) {
         Write-Error "Not connected to Microsoft Graph. Run Connect-MgGraph first."
-        break
+        return
     }
 
     if (-not (Test-Path $FolderPath)) {
         Write-Error "Folder path '$FolderPath' does not exist."
-        break
+        return
     }
 
     $JsonFiles = Get-ChildItem -Path $FolderPath -Filter *.json -File
 
     if (-not $JsonFiles) {
         Write-Error "No JSON files found in folder: $FolderPath"
-        break
+        return
     }
+
+    # Properties that are tenant-specific and must be stripped before import
+    $PropertiesToRemove = @(
+        "id",
+        "createdDateTime",
+        "lastModifiedDateTime",
+        "version",
+        "supportsScopeTags",
+        "supportedScopeTags"
+    )
 
     $Results = @()
 
@@ -49,81 +64,75 @@ Imports all Intune Device Configuration Policies from the specified folder.
 
         Write-Host "Processing: $($File.Name)"
 
-            # Read JSON
-            $RawJson = Get-Content -Path $File.FullName -Raw
+        # Parse JSON
+        try {
+            $RawJson    = Get-Content -Path $File.FullName -Raw
             $JsonObject = $RawJson | ConvertFrom-Json
-
-            # Remove properties not allowed on import
-            $JsonObject.PSObject.Properties.Remove("id")
-            $JsonObject.PSObject.Properties.Remove("createdDateTime")
-            $JsonObject.PSObject.Properties.Remove("lastModifiedDateTime")
-            $JsonObject.PSObject.Properties.Remove("version")
-            $JsonObject.PSObject.Properties.Remove("supportsScopeTags")
-            $JsonObject.PSObject.Properties.Remove("supportedScopeTags")
-
-            $DisplayName = $JsonObject.name
-
-            if (-not $DisplayName) {
-                Write-Error "Policy file '$($File.Name)' does not contain a 'name' property."
-                break
-            }
-
-            # Check if policy already exists
-            try {
-                $FilterUri = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$DisplayName'"
-                $Existing = Invoke-MgGraphRequest -Method GET -Uri $FilterUri   
-            }
-            catch {
-                Write-Error "Failed to query existing policies for '$DisplayName': $_"
-                break
-            }
-
-            $ExistingPolicy = $Existing.value | Select-Object -First 1
-
-            $Body = $JsonObject | ConvertTo-Json -Depth 20
-
-            if ($ExistingPolicy) {
-
-                $PolicyId = $ExistingPolicy.id
-                Write-Host "Policy exists. Updating: $DisplayName ($PolicyId)"
-                try {
-                Invoke-MgGraphRequest -Method PUT -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$PolicyId" -Body $Body -ContentType "application/json"
-                }
-                catch {
-                    Write-Error "Failed to update policy '$DisplayName': $_"
-                    break
-                }
-            }
-            else {
-                Write-Host "Policy does not exist. Creating: $DisplayName"
-                try {
-                    $Created = Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" -Body $Body -ContentType "application/json"
-                }
-                catch {
-                    Write-Error "Failed to create policy '$DisplayName': $_"
-                    break
-                }
-                $PolicyId = $Created.id
-            }
-
-            if (-not $PolicyId) {
-                Write-Error "Failed to determine Policy ID for '$DisplayName'"
-                break
-            }
-
-            Write-Host "Policy imported: $DisplayName ($PolicyId)"
-
-            # Return object for workflow
-            $Results += [PSCustomObject]@{
-                Name = $File.Name 
-                Id   = $PolicyId
-            }
-
         }
         catch {
-            Write-Error "Failed processing $($File.Name): $_"
-            break
+            Write-Warning "Could not parse '$($File.Name)' as JSON. Skipping."
+            continue
         }
-            return $Results
+
+        # Strip read-only / tenant-specific properties
+        foreach ($Prop in $PropertiesToRemove) {
+            $JsonObject.PSObject.Properties.Remove($Prop)
+        }
+
+        $DisplayName = $JsonObject.name
+
+        if (-not $DisplayName) {
+            Write-Warning "Policy file '$($File.Name)' does not contain a 'name' property. Skipping."
+            continue
+        }
+
+        # Check whether the policy already exists (skip rather than overwrite)
+        try {
+            $FilterUri = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=name eq '$DisplayName'"
+            $Existing  = Invoke-MgGraphRequest -Method GET -Uri $FilterUri -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Failed to query existing policies for '$DisplayName'. Skipping. Error: $_"
+            continue
+        }
+
+        if ($Existing.value.Count -gt 0) {
+            Write-Warning "Policy '$DisplayName' already exists in tenant. Skipping — run Test-IntuneDeviceConfigurationPolicy to review conflicts before import."
+            continue
+        }
+
+        $Body = $JsonObject | ConvertTo-Json -Depth 20
+
+        if ($PSCmdlet.ShouldProcess($DisplayName, "Create Intune Device Configuration Policy")) {
+
+            try {
+                $Created = Invoke-MgGraphRequest - Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" -Body $Body -ContentType "application/json" -ErrorAction Stop
+            }
+            catch {
+                Write-Warning "Failed to create policy '$DisplayName'. Skipping. Error: $_"
+                continue
+            }
+
+            $PolicyId = $Created.id
+
+            if (-not $PolicyId) {
+                Write-Warning "Policy '$DisplayName' was submitted but no ID was returned. Skipping."
+                continue
+            }
+
+            Write-Host "Policy created: $DisplayName [$PolicyId]"
+
+            $Results += [PSCustomObject]@{
+                Name       = $DisplayName
+                Id         = $PolicyId
+                SourceFile = $File.Name
+            }
+        }
+        else {
+            # -WhatIf path — report what would happen without calling the API
+            Write-Host "WhatIf: Would create policy '$DisplayName' from '$($File.Name)'"
+        }
     }
 
+    return $Results
+}
