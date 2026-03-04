@@ -23,9 +23,7 @@ env:
 
 jobs:
 
-  # ──────────────────────────────────────────────────────────────
   # PR: Generate staged JSON files and commit them to the branch
-  # ──────────────────────────────────────────────────────────────
   validate_assignments:
     if: github.event_name == 'pull_request' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
@@ -195,9 +193,7 @@ jobs:
           git commit -m "Auto-generated Intune assignment JSON and reports - ${{ steps.set_date.outputs.run_date }}" || echo "No changes to commit"
           git push origin HEAD:${{ github.head_ref }}
 
-  # ──────────────────────────────────────────────────────────────
   # Post-merge: Apply merged assignment files to Intune
-  # ──────────────────────────────────────────────────────────────
   apply_assignments:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
