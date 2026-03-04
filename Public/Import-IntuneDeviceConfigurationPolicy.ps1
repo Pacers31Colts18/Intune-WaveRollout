@@ -106,7 +106,7 @@ function Import-IntuneDeviceConfigurationPolicy {
         if ($PSCmdlet.ShouldProcess($DisplayName, "Create Intune Device Configuration Policy")) {
 
             try {
-                $Created = Invoke-MgGraphRequest - Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" -Body $Body -ContentType "application/json" -ErrorAction Stop
+                $Created = Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies" -Body $Body -ContentType "application/json" -ErrorAction Stop
             }
             catch {
                 Write-Warning "Failed to create policy '$DisplayName'. Skipping. Error: $_"
