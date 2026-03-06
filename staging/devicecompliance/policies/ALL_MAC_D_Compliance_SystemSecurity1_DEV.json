@@ -1,5 +1,5 @@
 {
-  "scheduledActionsForRule@odata.context": "https://graph.microsoft.com/beta/$metadata#deviceManagement/deviceCompliancePolicies('e0acd62e-5796-4a01-b145-0b297bb32d52')/microsoft.graph.macOSCompliancePolicy/scheduledActionsForRule(scheduledActionConfigurations())",
+  //"scheduledActionsForRule@odata.context": "https://graph.microsoft.com/beta/$metadata#deviceManagement/deviceCompliancePolicies('e0acd62e-5796-4a01-b145-0b297bb32d52')/microsoft.graph.macOSCompliancePolicy/scheduledActionsForRule(scheduledActionConfigurations())",
   "firewallEnableStealthMode": false,
   "passwordPreviousPasswordBlockCount": null,
   "passwordRequired": false,
