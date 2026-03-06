@@ -48,7 +48,7 @@ function Import-IntuneDeviceCompliancePolicy {
         return
     }
 
-    # Properties that are tenant-specific and must be stripped before import
+    # Top-level properties that are tenant-specific and must be stripped before import
     $PropertiesToRemove = @(
         "id",
         "createdDateTime",
@@ -65,9 +65,12 @@ function Import-IntuneDeviceCompliancePolicy {
 
         Write-Host "Processing: $($File.Name)"
 
-        # Parse JSON
+        # Parse JSON — strip all @odata annotation keys from raw string first
+        # to avoid PSObject.Properties.Remove() failing on keys with special characters
         try {
             $RawJson    = Get-Content -Path $File.FullName -Raw
+            $RawJson = $RawJson -replace '"[^"]*@odata\.context"\s*:\s*"[^"]*",?\s*', ''
+            $RawJson = $RawJson -replace '"[^"]*@odata\.nextLink"\s*:\s*"[^"]*",?\s*', ''
             $JsonObject = $RawJson | ConvertFrom-Json
         }
         catch {
@@ -75,9 +78,21 @@ function Import-IntuneDeviceCompliancePolicy {
             continue
         }
 
-        # Strip read-only / tenant-specific properties
+        # Strip read-only / tenant-specific top-level properties
         foreach ($Prop in $PropertiesToRemove) {
             $JsonObject.PSObject.Properties.Remove($Prop)
+        }
+
+        # Strip tenant-specific IDs from nested objects inside scheduledActionsForRule
+        if ($JsonObject.scheduledActionsForRule) {
+            foreach ($Rule in @($JsonObject.scheduledActionsForRule)) {
+                $Rule.PSObject.Properties.Remove("id")
+                if ($Rule.scheduledActionConfigurations) {
+                    foreach ($Config in @($Rule.scheduledActionConfigurations)) {
+                        $Config.PSObject.Properties.Remove("id")
+                    }
+                }
+            }
         }
 
         $DisplayName = $JsonObject.displayName
