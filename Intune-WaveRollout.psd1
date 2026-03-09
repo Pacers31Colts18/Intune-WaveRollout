@@ -71,18 +71,21 @@ RequiredModules = ''
 # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
 FunctionsToExport = @(
     'Export-IntuneDeviceConfigurationPolicyAssignments',
-    'Import-IntuneWindowsAutopilotDeploymentProfile',
+    'Import-IntuneConfigurationPolicy',
     'Import-IntuneDeviceCompliancePolicy',
     'Import-IntuneDeviceConfigurationPolicy',
-    'Import-IntuneConfigurationPolicy',
+    'Import-IntuneDeviceHealthScript',
+    'Import-IntuneWindowsAutopilotDeploymentProfile',
     'Merge-IntuneAssignmentJson',
     'New-IntuneAssignmentJson',
     'New-IntuneAssignmentReport',
     'Set-IntuneDeviceConfigurationPolicyAssignment',
-    'Test-IntuneWindowsAutopilotDeploymentProfile',
     'Test-IntuneConfigurationPolicy',
     'Test-IntuneDeviceConfigurationPolicy',
-    'Test-IntuneDeviceCompliancePolicy'
+    'Test-IntuneDeviceCompliancePolicy',
+    'Test-IntuneDeviceHealthScript',
+    'Test-IntuneWindowsAutopilotDeploymentProfile'
+
 )
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
