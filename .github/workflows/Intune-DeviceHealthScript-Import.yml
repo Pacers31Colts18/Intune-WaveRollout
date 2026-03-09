@@ -115,6 +115,6 @@ jobs:
 
           Write-Host "`nImport summary:"
           $results | ForEach-Object {
-            Write-Host "$($_.Name) [$($_.Id)] (from $($_.SourceFolder))"
+            Write-Host "$($_.displayName) [$($_.Id)]"
           }
           Write-Host "`nAll scripts imported successfully."
